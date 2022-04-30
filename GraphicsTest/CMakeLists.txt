@@ -4,7 +4,11 @@
 cmake_minimum_required (VERSION 3.20)
 
 # Add source to this project's executable.
-add_executable (GraphicsTest WIN32 "GraphicsTest.cpp")
+add_executable (GraphicsTest WIN32
+	GraphicsTest.cpp
+
+	JcabD3D.cpp			JcabD3D.h
+)
 
 target_compile_definitions(GraphicsTest PRIVATE UNICODE _UNICODE)
 
