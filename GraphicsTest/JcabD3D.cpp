@@ -237,6 +237,22 @@ RenderDevice RenderDevice::Create(HWND const hwnd)
     return pipeline;
 }
 
+
+ComPtr<ID3D12RootSignature> RenderDevice::CreateRootSignature(D3D12_ROOT_SIGNATURE_DESC  const& desc)
+{
+    ComPtr<ID3D12RootSignature> rootSignature;
+    ComPtr<ID3DBlob> signature;
+    ComPtr<ID3DBlob> error;
+    ThrowIfFailed(D3D12SerializeRootSignature(reinterpret_cast<D3D12_ROOT_SIGNATURE_DESC const*>(&desc), D3D_ROOT_SIGNATURE_VERSION_1, &signature, &error));
+    ThrowIfFailed(device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(), IID_PPV_ARGS(&rootSignature)));
+    return rootSignature;
+}
+
+ComPtr<ID3D12RootSignature> RenderDevice::CreateRootSignature(D3D12_ROOT_SIGNATURE_DESC1 const& desc)
+{
+    return CreateRootSignature(reinterpret_cast<D3D12_ROOT_SIGNATURE_DESC const&>(desc));
+}
+
 ComPtr<ID3D12GraphicsCommandList> RenderDevice::CreateDirectCommandList(ComRef<ID3D12CommandAllocator> allocator, ComRef<ID3D12PipelineState> pipelineState)
 {
     ComPtr<ID3D12GraphicsCommandList> commandList;

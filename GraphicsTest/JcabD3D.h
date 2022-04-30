@@ -43,6 +43,10 @@ inline void ThrowIfFailed(HRESULT hr)
 }
 
 
+namespace Root { template < typename... args > struct SignatureDescription; }
+
+
+
 
 ComPtr<IDXGIAdapter1> FindHardwareAdapter(ComRef<IDXGIFactory1> pFactory, bool requestHighPerformanceAdapter = true);
 
@@ -117,6 +121,11 @@ struct RenderDevice
     UINT                frameIndex;
 
     GpuSignalingFence   fence;
+
+    ComPtr<ID3D12RootSignature> CreateRootSignature(D3D12_ROOT_SIGNATURE_DESC  const& desc);
+    ComPtr<ID3D12RootSignature> CreateRootSignature(D3D12_ROOT_SIGNATURE_DESC1 const& desc);
+
+    template < typename... args > ComPtr<ID3D12RootSignature> CreateRootSignature();
 
     ComPtr<ID3D12GraphicsCommandList> CreateDirectCommandList(ComRef<ID3D12CommandAllocator> allocator, ComRef<ID3D12PipelineState> pipelineState = nullptr);
 
@@ -226,3 +235,151 @@ inline void TransitionResource(ComRef<ID3D12GraphicsCommandList> commandList, Co
     };
     commandList->ResourceBarrier(1, &barrier);
 }
+
+class SinglePassCommandList
+{
+public:
+
+    template < typename... RootParams >
+    static SinglePassCommandList Create(RootParams&&...);
+
+private:
+    ComPtr<ID3D12RootSignature>       m_root;
+    ComPtr<ID3D12PipelineState>       m_state;
+    ComPtr<ID3D12GraphicsCommandList> m_commandList;
+};
+
+
+
+namespace Root
+{
+
+template < UINT base, UINT count = 1 > struct SrvRange
+{
+    static constexpr D3D12_DESCRIPTOR_RANGE1 Range{ .RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV, .NumDescriptors = count, .BaseShaderRegister = base, .OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
+};
+
+template < UINT base, UINT count = 1 > struct SamplerRange
+{
+    static constexpr D3D12_DESCRIPTOR_RANGE1 Range{ .RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, .NumDescriptors = count, .BaseShaderRegister = base, .OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
+};
+
+
+
+template < D3D12_SHADER_VISIBILITY visibility, typename... ranges > struct Table
+{
+    static constexpr std::array<D3D12_DESCRIPTOR_RANGE1, sizeof...(ranges)> Ranges{ ranges::Range... };
+    static constexpr D3D12_ROOT_PARAMETER1                                  Parameter
+    {
+        .ParameterType    = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
+        .DescriptorTable  { .NumDescriptorRanges = Ranges.size(), .pDescriptorRanges = Ranges.data(), },
+        .ShaderVisibility = visibility,
+    };
+};
+
+template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space, D3D12_ROOT_DESCRIPTOR_FLAGS flags > struct Cbv
+{
+    static constexpr D3D12_ROOT_PARAMETER1 Parameter
+    {
+        .ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV,
+        .Descriptor{
+            .ShaderRegister = reg,
+            .RegisterSpace  = space,
+            .Flags = flags,
+        },
+        .ShaderVisibility = visibility,
+    };
+};
+
+
+
+template < typename... parameters > struct ParameterList
+{
+    static constexpr std::array<D3D12_ROOT_PARAMETER1, sizeof...(parameters)> Parameters { parameters::Parameter... };
+
+    static constexpr auto Size = sizeof...(parameters);
+    static constexpr auto Data = Parameters.data();
+
+    template < typename parameter > static constexpr ParameterList<parameter, parameters...> Cons{};
+};
+
+
+
+template < D3D12_ROOT_SIGNATURE_FLAGS flags > struct Flags{};
+
+
+
+template <> struct SignatureDescription<>
+{
+    static constexpr ParameterList<> Parameters{};
+    static constexpr D3D12_ROOT_SIGNATURE_DESC1 Desc{
+        .NumParameters     = 0,
+        .pParameters       = nullptr,
+        .NumStaticSamplers = 0,
+        .pStaticSamplers   = nullptr,
+        .Flags             = D3D12_ROOT_SIGNATURE_FLAG_NONE,
+    };
+
+    operator D3D12_ROOT_SIGNATURE_DESC1 const&() const { return Desc; }
+};
+
+template < D3D12_SHADER_VISIBILITY visibility, typename... ranges, typename... args > struct SignatureDescription<Table<visibility, ranges...>, args...>
+{
+private:
+    using Next = SignatureDescription<args...>;
+public:
+    static constexpr auto Parameters = Next::Parameters.Cons<Table<visibility, ranges...>>;
+    static constexpr D3D12_ROOT_SIGNATURE_DESC1 Desc{
+        .NumParameters     = Parameters.Size             ,
+        .pParameters       = Parameters.Data             ,
+        .NumStaticSamplers = Next::Desc.NumStaticSamplers,
+        .pStaticSamplers   = Next::Desc.pStaticSamplers  ,
+        .Flags             = Next::Desc.Flags            ,
+    };
+
+    operator D3D12_ROOT_SIGNATURE_DESC1 const&() const { return Desc; }
+};
+
+template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space, D3D12_ROOT_DESCRIPTOR_FLAGS flags, typename... args > struct SignatureDescription<Cbv<visibility, reg, space, flags>, args...>
+{
+private:
+    using Next = SignatureDescription<args...>;
+public:
+    static constexpr auto Parameters = Next::Parameters.Cons<Cbv<visibility, reg, space, flags>>;
+    static constexpr D3D12_ROOT_SIGNATURE_DESC1 Desc{
+        .NumParameters     = Parameters.Size             ,
+        .pParameters       = Parameters.Data             ,
+        .NumStaticSamplers = Next::Desc.NumStaticSamplers,
+        .pStaticSamplers   = Next::Desc.pStaticSamplers  ,
+        .Flags             = Next::Desc.Flags            ,
+    };
+
+    operator D3D12_ROOT_SIGNATURE_DESC1 const&() const { return Desc; }
+};
+
+template < D3D12_ROOT_SIGNATURE_FLAGS flags, typename... args > struct SignatureDescription<Flags<flags>, args...>
+{
+private:
+    using Next = SignatureDescription<args...>;
+public:
+    static constexpr auto Parameters = Next::Parameters;
+    static constexpr D3D12_ROOT_SIGNATURE_DESC1 Desc{
+        .NumParameters     = Next::Desc.NumParameters    ,
+        .pParameters       = Next::Desc.pParameters      ,
+        .NumStaticSamplers = Next::Desc.NumStaticSamplers,
+        .pStaticSamplers   = Next::Desc.pStaticSamplers  ,
+        .Flags             = Next::Desc.Flags | flags    ,
+    };
+
+    operator D3D12_ROOT_SIGNATURE_DESC1 const&() const { return Desc; }
+};
+
+}
+// namespace Root
+
+template < typename... args >
+inline ComPtr<ID3D12RootSignature> RenderDevice::CreateRootSignature()
+{
+    return CreateRootSignature(Root::SignatureDescription<args...>{});
+}
+

@@ -42,20 +42,6 @@ float4 PSMain(PSInput input) : SV_TARGET
 
 
 
-PSInput VSModel(float4 position : POSITION, float4 color : COLOR)
-{
-    PSInput result;
-
-    result.position = mul(position, projection);
-    result.color = color;
-
-    return result;
-}
-
-float4 PSModel(PSInput input) : SV_TARGET
-{
-    return input.color;
-}
 
 
 

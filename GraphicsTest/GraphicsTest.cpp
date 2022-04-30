@@ -34,30 +34,11 @@ Model LoadModel(ID3D12GraphicsCommandList* pCommandList, RenderDevice& renderDev
 {
     Model model{};
 
-    {
-        D3D12_ROOT_PARAMETER1 const rootParameter{ // Performance tip: Order root parameters from most frequently accessed to least frequently accessed.
-            .ParameterType    = D3D12_ROOT_PARAMETER_TYPE_CBV,
-            .Descriptor{
-                .ShaderRegister = 0,
-                .RegisterSpace  = 0,
-                .Flags = D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC,
-            },
-            .ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX,
-        };
-
-        D3D12_ROOT_SIGNATURE_DESC const rootSignatureDesc{
-            .NumParameters     = 1,
-            .pParameters       = reinterpret_cast<D3D12_ROOT_PARAMETER const*>(&rootParameter),
-            .NumStaticSamplers = 0,
-            .pStaticSamplers   = nullptr,
-            .Flags             = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
-        };
-
-        ComPtr<ID3DBlob> signature;
-        ComPtr<ID3DBlob> error;
-        ThrowIfFailed(D3D12SerializeRootSignature(&rootSignatureDesc, D3D_ROOT_SIGNATURE_VERSION_1, &signature, &error));
-        ThrowIfFailed(renderDevice.device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(), IID_PPV_ARGS(&model.RootSignature)));
-    }
+    // Create the rendering root signature.
+    model.RootSignature = renderDevice.CreateRootSignature<
+        Root::Cbv<D3D12_SHADER_VISIBILITY_VERTEX, 0, 0, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC>,
+        Root::Flags<D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT>
+    >();
 
     // Create the pipeline state, which includes compiling and loading shaders.
     {
@@ -72,8 +53,8 @@ Model LoadModel(ID3D12GraphicsCommandList* pCommandList, RenderDevice& renderDev
         UINT compileFlags = 0;
 #endif
 
-        ThrowIfFailed(D3DCompileFromFile(L"shaders.hlsl", nullptr, nullptr, "VSModel", "vs_5_0", compileFlags, 0, &vertexShader, &errors));
-        ThrowIfFailed(D3DCompileFromFile(L"shaders.hlsl", nullptr, nullptr, "PSModel", "ps_5_0", compileFlags, 0, &pixelShader, &errors));
+        ThrowIfFailed(D3DCompileFromFile(L"model.hlsl", nullptr, nullptr, "VSModel", "vs_5_0", compileFlags, 0, &vertexShader, &errors));
+        ThrowIfFailed(D3DCompileFromFile(L"model.hlsl", nullptr, nullptr, "PSModel", "ps_5_0", compileFlags, 0, &pixelShader, &errors));
 
         // Define the vertex input layout.
         D3D12_INPUT_ELEMENT_DESC const inputElementDescs[] =
@@ -265,62 +246,16 @@ Assets LoadAssets(RenderDevice& renderDevice)
     assets.samplerDescriptorHeap = assets.samplerDescriptorHeap.Create(renderDevice.device.Get(), 10, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
 
     // Create an empty root signature.
-    {
-        D3D12_ROOT_SIGNATURE_DESC const rootSignatureDesc{
-            .NumParameters     = 0,
-            .pParameters       = nullptr,
-            .NumStaticSamplers = 0,
-            .pStaticSamplers   = nullptr,
-            .Flags             = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
-        };
-
-        ComPtr<ID3DBlob> signature;
-        ComPtr<ID3DBlob> error;
-        ThrowIfFailed(D3D12SerializeRootSignature(&rootSignatureDesc, D3D_ROOT_SIGNATURE_VERSION_1, &signature, &error));
-        ThrowIfFailed(renderDevice.device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(), IID_PPV_ARGS(&assets.rootSignature)));
-    }
+    assets.rootSignature = renderDevice.CreateRootSignature<
+        Root::Flags<D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT>
+    >();
 
     // Create the rendering root signature.
-    {
-        D3D12_DESCRIPTOR_RANGE1 const srvRange     { .RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV    , .NumDescriptors = 1, .BaseShaderRegister = 0, .OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
-        D3D12_DESCRIPTOR_RANGE1 const samplerRanges{ .RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, .NumDescriptors = 1, .BaseShaderRegister = 0, .OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
-
-        // Performance tip: Order root parameters from most frequently accessed to least frequently accessed.
-        D3D12_ROOT_PARAMETER1 const rootParameters[]
-        {
-            {
-                .ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-                .DescriptorTable
-                {
-                    .NumDescriptorRanges = 1,
-                    .pDescriptorRanges   = &srvRange,
-                },
-                .ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL,
-            },
-            {
-                .ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-                .DescriptorTable
-                {
-                    .NumDescriptorRanges = 1,
-                    .pDescriptorRanges   = &samplerRanges,
-                },
-                .ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL,
-            },
-        };
-
-        D3D12_ROOT_SIGNATURE_DESC1 const rootSignatureDesc{
-            .NumParameters     = std::size(rootParameters),
-            .pParameters       = rootParameters,
-            .NumStaticSamplers = 0,
-            .pStaticSamplers   = nullptr,
-            .Flags             = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
-        };
-
-        ComPtr<ID3DBlob> signature;
-        ComPtr<ID3DBlob> error;
-        ThrowIfFailed(D3D12SerializeRootSignature(reinterpret_cast<D3D12_ROOT_SIGNATURE_DESC const*>(&rootSignatureDesc), D3D_ROOT_SIGNATURE_VERSION_1, &signature, &error));
-        ThrowIfFailed(renderDevice.device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(), IID_PPV_ARGS(&assets.renderSignature)));
-    }
+    assets.renderSignature = renderDevice.CreateRootSignature<
+        Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SrvRange    <0, 1>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SamplerRange<0, 1>>,
+        Root::Flags<D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT>
+    >();
 
     // Create rendering surfaces.
     {
