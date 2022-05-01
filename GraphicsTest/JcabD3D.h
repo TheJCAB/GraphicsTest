@@ -7,6 +7,8 @@
 #include <DirectXMath.h>
 
 #include <array>
+#include <functional>
+
 
 // Note that while ComPtr is used to manage the lifetime of resources on the CPU,
 // it has no understanding of the lifetime of resources on the GPU. Apps must account
@@ -43,8 +45,8 @@ inline void ThrowIfFailed(HRESULT hr)
 }
 
 
-namespace Root { template < typename... args > struct SignatureDescription; }
-
+namespace Root     { template < typename... args > struct SignatureDescription; }
+namespace Pipeline {                               struct State;                }
 
 
 
@@ -86,14 +88,16 @@ private:
 class GpuSignalingFence
 {
 public:
+    GpuSignalingFence(ComRef<ID3D12Device>, ComPtr<ID3D12CommandQueue>);
+
+    GpuSignalingFence(GpuSignalingFence&&)            = delete;
+    GpuSignalingFence& operator=(GpuSignalingFence&&) = delete;
 
     UINT64 SignalOnGpu();
 
     void WaitOnCpu(UINT64);
 
-    void SignalAndDrainQueue() { WaitOnCpu(SignalOnGpu()); }
-
-    static GpuSignalingFence Create(ComRef<ID3D12Device>, ComPtr<ID3D12CommandQueue>);
+    void WaitForGpuIdle() { WaitOnCpu(SignalOnGpu()); }
 
 private:
     UINT64                     m_fenceValue = 0;
@@ -114,26 +118,41 @@ struct RenderDevice
     D3D12_VIEWPORT               viewport;
     D3D12_RECT                   scissorRect;
 
+    ComPtr<ID3D12CommandAllocator> assetsCommandAllocator;
+
+    ComPtr<ID3D12GraphicsCommandList> commandList;
+
     std::array<ComPtr<ID3D12Resource>        , FrameCount> renderTargets;
     std::array<ComPtr<ID3D12CommandAllocator>, FrameCount> commandAllocators;
 
     UINT64              frameFenceValues[FrameCount];
     UINT                frameIndex;
 
-    GpuSignalingFence   fence;
+    std::shared_ptr<GpuSignalingFence> fence;
 
-    ComPtr<ID3D12RootSignature> CreateRootSignature(D3D12_ROOT_SIGNATURE_DESC  const& desc);
-    ComPtr<ID3D12RootSignature> CreateRootSignature(D3D12_ROOT_SIGNATURE_DESC1 const& desc);
+    ComPtr<ID3D12CommandAllocator> CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE) const;
 
-    template < typename... args > ComPtr<ID3D12RootSignature> CreateRootSignature();
+    ComPtr<ID3D12RootSignature> CreateRootSignature(D3D12_ROOT_SIGNATURE_DESC  const&) const;
+    ComPtr<ID3D12RootSignature> CreateRootSignature(D3D12_ROOT_SIGNATURE_DESC1 const&) const;
 
-    ComPtr<ID3D12GraphicsCommandList> CreateDirectCommandList(ComRef<ID3D12CommandAllocator> allocator, ComRef<ID3D12PipelineState> pipelineState = nullptr);
+    template < typename... args > ComPtr<ID3D12RootSignature> CreateRootSignature() const;
+
+    ComPtr<ID3D12PipelineState> Create(Pipeline::State const&);
+
+    ComPtr<ID3D12GraphicsCommandList> CreateDirectCommandList(ComRef<ID3D12CommandAllocator>, ComRef<ID3D12PipelineState> = nullptr) const;
+
+    void ExecuteCommandList(ComRef<ID3D12GraphicsCommandList>);
+
+    void WaitForGpuIdle() { fence->WaitForGpuIdle(); }
 
     void PresentFrame();
 
     static RenderDevice Create(HWND const hwnd);
 };
 
+void ExecuteCommandList(ComRef<ID3D12CommandQueue>, ComRef<ID3D12GraphicsCommandList>);
+
+ComPtr<ID3D12Resource> CreateUploadBuffer(ComRef<ID3D12Device>, UINT size);
 
 
 
@@ -176,6 +195,45 @@ constexpr D3D12_RASTERIZER_DESC defaultRasterizerDesc
     .AntialiasedLineEnable = FALSE,
     .ForcedSampleCount     = 0,
     .ConservativeRaster    = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF,
+};
+
+constexpr D3D12_RANGE NullRange{ 0, 0 };
+
+constexpr D3D12_HEAP_PROPERTIES UploadHeapProperties
+{
+    .Type                 = D3D12_HEAP_TYPE_UPLOAD,
+    .CPUPageProperty      = D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+    .MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN,
+    .CreationNodeMask     = 1,
+    .VisibleNodeMask      = 1,
+};
+
+constexpr D3D12_HEAP_PROPERTIES StaticBufferHeapProperties
+{
+    .Type                 = D3D12_HEAP_TYPE_DEFAULT,
+    .CPUPageProperty      = D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+    .MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN,
+    .CreationNodeMask     = 1,
+    .VisibleNodeMask      = 1,
+};
+
+struct BufferDesc : D3D12_RESOURCE_DESC
+{
+    BufferDesc(UINT const size)
+        : D3D12_RESOURCE_DESC
+          {
+            .Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER,
+            .Alignment        = 0,
+            .Width            = size,
+            .Height           = 1,
+            .DepthOrArraySize = 1,
+            .MipLevels        = 1,
+            .Format           = DXGI_FORMAT_UNKNOWN,
+            .SampleDesc       { .Count = 1, .Quality = 0 },
+            .Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+            .Flags            = D3D12_RESOURCE_FLAG_NONE,
+          }
+    {}
 };
 
 
@@ -378,8 +436,88 @@ public:
 // namespace Root
 
 template < typename... args >
-inline ComPtr<ID3D12RootSignature> RenderDevice::CreateRootSignature()
+inline ComPtr<ID3D12RootSignature> RenderDevice::CreateRootSignature() const
 {
     return CreateRootSignature(Root::SignatureDescription<args...>{});
 }
 
+
+
+struct Shader
+{
+    wchar_t const* pFilename;
+    char const*    pFunction;
+    char const*    pTarget;
+    UINT           Flags = 0;
+};
+
+ComPtr<ID3DBlob> Compile(Shader const&);
+
+
+
+namespace Pipeline
+{
+
+struct MultisamplingState
+{
+    UINT Count   = 1;
+    UINT Quality = 0;
+    UINT Mask    = UINT_MAX;
+};
+
+constexpr MultisamplingState NoMultisampling{};
+
+constexpr D3D12_DEPTH_STENCIL_DESC NoDepthStencil{ .DepthEnable = FALSE, .StencilEnable = FALSE };
+
+struct State
+{
+    ComRef<ID3D12RootSignature>   RootSignature;
+
+    D3D12_PRIMITIVE_TOPOLOGY_TYPE TopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    D3D12_INPUT_LAYOUT_DESC       InputLayout  {};
+    ComPtr<ID3DBlob>              VS;
+    ComPtr<ID3DBlob>              DS;
+    ComPtr<ID3DBlob>              HS;
+    ComPtr<ID3DBlob>              GS;
+
+    ComPtr<ID3DBlob>              PS;
+    D3D12_RASTERIZER_DESC         RasterizerState   = defaultRasterizerDesc;
+    D3D12_BLEND_DESC              BlendState        = defaultBlendDesc;
+    D3D12_DEPTH_STENCIL_DESC      DepthStencilState = NoDepthStencil;
+    MultisamplingState            Multisampling     = NoMultisampling;
+    DXGI_FORMAT                   RTVFormats[8]     {};
+    DXGI_FORMAT                   DSVFormat         = DXGI_FORMAT_UNKNOWN;
+};
+
+}
+// namespace Pipeline
+
+
+class AssetUploader
+{
+public:
+    AssetUploader(RenderDevice const& renderDevice);
+    ~AssetUploader();
+
+    AssetUploader           (AssetUploader&&) = delete;
+    AssetUploader& operator=(AssetUploader&&) = delete;
+
+    void HoldPendingObject(ComPtr<IUnknown>);
+
+    ComPtr<ID3D12Resource> CreateStaticBuffer(UINT size, D3D12_RESOURCE_STATES initialState, std::function<void(void*)> dataFill);
+
+private:
+    ComPtr<ID3D12Device>               m_device;
+    ComPtr<ID3D12CommandQueue>         m_queue;
+    ComPtr<ID3D12CommandAllocator>     m_allocator;
+    ComPtr<ID3D12GraphicsCommandList>  m_commandList;
+    GpuSignalingFence                  m_fence;
+
+    struct PendingObject
+    {
+        UINT64           Fence;
+        ComPtr<IUnknown> Object;
+    };
+
+    std::vector<PendingObject> m_pendingObjects;
+};

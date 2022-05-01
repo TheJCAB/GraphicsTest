@@ -143,7 +143,7 @@ template class DescriptorHeap<D3D12_DESCRIPTOR_HEAP_TYPE_DSV        >;
 // Load the rendering pipeline dependencies.
 RenderDevice RenderDevice::Create(HWND const hwnd)
 {
-    RenderDevice pipeline{};
+    RenderDevice renderDevice{};
 
     UINT dxgiFactoryFlags = 0;
 
@@ -167,7 +167,7 @@ RenderDevice RenderDevice::Create(HWND const hwnd)
 
     ComPtr<IDXGIAdapter1> hardwareAdapter = GetPreferredAdapter(factory.Get());
 
-    ThrowIfFailed(D3D12CreateDevice(hardwareAdapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&pipeline.device)));
+    ThrowIfFailed(D3D12CreateDevice(hardwareAdapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&renderDevice.device)));
 
     // Describe and create the command queue.
     D3D12_COMMAND_QUEUE_DESC queueDesc{
@@ -175,7 +175,11 @@ RenderDevice RenderDevice::Create(HWND const hwnd)
         .Flags = D3D12_COMMAND_QUEUE_FLAG_NONE,
     };
 
-    ThrowIfFailed(pipeline.device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&pipeline.commandQueue)));
+    ThrowIfFailed(renderDevice.device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&renderDevice.commandQueue)));
+
+    ThrowIfFailed(renderDevice.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&renderDevice.assetsCommandAllocator)));
+    renderDevice.commandList = renderDevice.CreateDirectCommandList(renderDevice.assetsCommandAllocator);
+    ThrowIfFailed(renderDevice.commandList->Close());
 
     // Describe and create the swap chain.
     DXGI_SWAP_CHAIN_DESC1 swapChainDesc{
@@ -191,7 +195,7 @@ RenderDevice RenderDevice::Create(HWND const hwnd)
     {
         ComPtr<IDXGISwapChain1> swapChain1;
         ThrowIfFailed(factory->CreateSwapChainForHwnd(
-            pipeline.commandQueue.Get(),        // Swap chain needs the queue so that it can force a flush on it.
+            renderDevice.commandQueue.Get(),        // Swap chain needs the queue so that it can force a flush on it.
             hwnd,
             &swapChainDesc,
             nullptr,
@@ -199,46 +203,52 @@ RenderDevice RenderDevice::Create(HWND const hwnd)
             &swapChain1
         ));
 
-        ThrowIfFailed(swapChain1.As(&pipeline.swapChain));
+        ThrowIfFailed(swapChain1.As(&renderDevice.swapChain));
     }
 
     // This sample does not support fullscreen transitions.
     ThrowIfFailed(factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER));
 
-    pipeline.viewport    = D3D12_VIEWPORT{ 0, 0, 1280, 720, D3D12_MIN_DEPTH, D3D12_MAX_DEPTH };
-    pipeline.scissorRect = D3D12_RECT    { 0, 0, 1280, 720 };
+    renderDevice.viewport    = D3D12_VIEWPORT{ 0, 0, 1280, 720, D3D12_MIN_DEPTH, D3D12_MAX_DEPTH };
+    renderDevice.scissorRect = D3D12_RECT    { 0, 0, 1280, 720 };
 
     // Create descriptor heaps.
-    pipeline.rtvDescriptorHeap = pipeline.rtvDescriptorHeap    .Create(pipeline.device.Get(), 10);
+    renderDevice.rtvDescriptorHeap = renderDevice.rtvDescriptorHeap.Create(renderDevice.device.Get(), 10);
 
     // Create frame resources.
     {
-        auto rtvIndex = pipeline.rtvDescriptorHeap.AllocateDescriptors(2);
+        auto rtvIndex = renderDevice.rtvDescriptorHeap.AllocateDescriptors(2);
         assert(rtvIndex == 0);
-        auto rtvHandle = pipeline.rtvDescriptorHeap.GetCpuDescriptorHandle(0);
+        auto rtvHandle = renderDevice.rtvDescriptorHeap.GetCpuDescriptorHandle(0);
 
         // Create a RTV and a command allocator for each frame.
         for (UINT n = 0; n < FrameCount; n++)
         {
-            ThrowIfFailed(pipeline.swapChain->GetBuffer(n, IID_PPV_ARGS(&pipeline.renderTargets[n])));
-            pipeline.device->CreateRenderTargetView(pipeline.renderTargets[n].Get(), nullptr, rtvHandle);
+            ThrowIfFailed(renderDevice.swapChain->GetBuffer(n, IID_PPV_ARGS(&renderDevice.renderTargets[n])));
+            renderDevice.device->CreateRenderTargetView(renderDevice.renderTargets[n].Get(), nullptr, rtvHandle);
 
-            rtvHandle = pipeline.rtvDescriptorHeap.NextDescriptorHandle(rtvHandle);
+            rtvHandle = renderDevice.rtvDescriptorHeap.NextDescriptorHandle(rtvHandle);
 
-            ThrowIfFailed(pipeline.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&pipeline.commandAllocators[n])));
+            ThrowIfFailed(renderDevice.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&renderDevice.commandAllocators[n])));
         }
     }
 
-    pipeline.frameIndex = pipeline.swapChain->GetCurrentBackBufferIndex();
+    renderDevice.frameIndex = renderDevice.swapChain->GetCurrentBackBufferIndex();
 
     // Create synchronization objects.
-    pipeline.fence = pipeline.fence.Create(pipeline.device, pipeline.commandQueue);
+    renderDevice.fence = std::make_shared<GpuSignalingFence>(renderDevice.device, renderDevice.commandQueue);
 
-    return pipeline;
+    return renderDevice;
 }
 
+ComPtr<ID3D12CommandAllocator> RenderDevice::CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE const type) const
+{
+    ComPtr<ID3D12CommandAllocator> allocator;
+    ThrowIfFailed(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)));
+    return allocator;
+}
 
-ComPtr<ID3D12RootSignature> RenderDevice::CreateRootSignature(D3D12_ROOT_SIGNATURE_DESC  const& desc)
+ComPtr<ID3D12RootSignature> RenderDevice::CreateRootSignature(D3D12_ROOT_SIGNATURE_DESC  const& desc) const
 {
     ComPtr<ID3D12RootSignature> rootSignature;
     ComPtr<ID3DBlob> signature;
@@ -248,12 +258,12 @@ ComPtr<ID3D12RootSignature> RenderDevice::CreateRootSignature(D3D12_ROOT_SIGNATU
     return rootSignature;
 }
 
-ComPtr<ID3D12RootSignature> RenderDevice::CreateRootSignature(D3D12_ROOT_SIGNATURE_DESC1 const& desc)
+ComPtr<ID3D12RootSignature> RenderDevice::CreateRootSignature(D3D12_ROOT_SIGNATURE_DESC1 const& desc) const
 {
     return CreateRootSignature(reinterpret_cast<D3D12_ROOT_SIGNATURE_DESC const&>(desc));
 }
 
-ComPtr<ID3D12GraphicsCommandList> RenderDevice::CreateDirectCommandList(ComRef<ID3D12CommandAllocator> allocator, ComRef<ID3D12PipelineState> pipelineState)
+ComPtr<ID3D12GraphicsCommandList> RenderDevice::CreateDirectCommandList(ComRef<ID3D12CommandAllocator> allocator, ComRef<ID3D12PipelineState> pipelineState) const
 {
     ComPtr<ID3D12GraphicsCommandList> commandList;
     ThrowIfFailed(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator, pipelineState, IID_PPV_ARGS(&commandList)));
@@ -287,12 +297,22 @@ void GpuSignalingFence::WaitOnCpu(UINT64 const value)
     }
 }
 
-GpuSignalingFence GpuSignalingFence::Create(ComRef<ID3D12Device> const device, ComPtr<ID3D12CommandQueue> const queue)
+GpuSignalingFence::GpuSignalingFence(ComRef<ID3D12Device> const device, ComPtr<ID3D12CommandQueue> queue)
 {
-    GpuSignalingFence fence{};
-    ThrowIfFailed(device->CreateFence(fence.m_fenceValue, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence.m_fence)));
-    fence.m_queue = std::move(queue);
-    return fence;
+    ThrowIfFailed(device->CreateFence(m_fenceValue, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fence)));
+    m_queue = std::move(queue);
+}
+
+void ExecuteCommandList(ComRef<ID3D12CommandQueue> const queue, ComRef<ID3D12GraphicsCommandList> const commandList)
+{
+    ID3D12CommandList* const list = commandList;
+    queue->ExecuteCommandLists(1, &list);
+}
+
+void RenderDevice::ExecuteCommandList(ComRef<ID3D12GraphicsCommandList> const commandList)
+{
+    ID3D12CommandList* const list = commandList;
+    commandQueue->ExecuteCommandLists(1, &list);
 }
 
 // Prepare to render the next frame.
@@ -302,15 +322,14 @@ void RenderDevice::PresentFrame()
     ThrowIfFailed(swapChain->Present(1, 0));
 
     // Signal the end of the frame's command lists.
-    auto const currentFenceValue = frameFenceValues[frameIndex] = fence.SignalOnGpu();
+    auto const currentFenceValue = frameFenceValues[frameIndex] = fence->SignalOnGpu();
 
     // Update the frame index.
     frameIndex = swapChain->GetCurrentBackBufferIndex();
 
     // If the next frame is not ready to be rendered yet, wait until it is ready.
-    fence.WaitOnCpu(frameFenceValues[frameIndex]);
+    fence->WaitOnCpu(frameFenceValues[frameIndex]);
 }
-
 
 
 
@@ -324,29 +343,10 @@ ComPtr<ID3D12Resource> CreateUploadConstantBuffer(
 
     UINT const alignedSize = CalculateConstantBufferByteSize(size);
 
-    D3D12_HEAP_PROPERTIES const uploadHeapProperties{
-        .Type                 = D3D12_HEAP_TYPE_UPLOAD,
-        .CPUPageProperty      = D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
-        .MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN,
-        .CreationNodeMask     = 1,
-        .VisibleNodeMask      = 1,
-    };
-
-    D3D12_RESOURCE_DESC const bufferDesc{
-        .Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER,
-        .Alignment        = 0,
-        .Width            = alignedSize,
-        .Height           = 1,
-        .DepthOrArraySize = 1,
-        .MipLevels        = 1,
-        .Format           = DXGI_FORMAT_UNKNOWN,
-        .SampleDesc       { .Count = 1, .Quality = 0 },
-        .Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
-        .Flags            = D3D12_RESOURCE_FLAG_NONE,
-    };
+    BufferDesc bufferDesc{ alignedSize };
 
     ThrowIfFailed(device->CreateCommittedResource(
-        &uploadHeapProperties,
+        &UploadHeapProperties,
         D3D12_HEAP_FLAG_NONE,
         &bufferDesc,
         initState,
@@ -354,4 +354,159 @@ ComPtr<ID3D12Resource> CreateUploadConstantBuffer(
         IID_PPV_ARGS(&resource)));
 
     return resource;
+}
+
+
+
+
+ComPtr<ID3DBlob> Compile(Shader const& shader)
+{
+    ComPtr<ID3DBlob> compiledShader;
+#if defined(_DEBUG)
+    // Enable better shader debugging with the graphics debugging tools.
+    auto const compileFlags = shader.Flags | D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#else
+    auto const compileFlags = shader.Flags;
+#endif
+    ComPtr<ID3DBlob> errors;
+    ThrowIfFailed(D3DCompileFromFile(shader.pFilename, nullptr, nullptr, shader.pFunction, shader.pTarget, compileFlags, 0, &compiledShader, &errors));
+    return compiledShader;
+}
+
+D3D12_SHADER_BYTECODE GetShaderBytecode(ComRef<ID3DBlob> const shader)
+{
+    if (shader)
+    {
+        return { shader->GetBufferPointer(), shader->GetBufferSize() };
+    }
+    else
+    {
+        return {};
+    }
+}
+
+ComPtr<ID3D12PipelineState> RenderDevice::Create(Pipeline::State const& state)
+{
+    ComPtr<ID3D12PipelineState> result;
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC const desc
+    {
+        .pRootSignature        = state.RootSignature,
+        .VS                    = GetShaderBytecode(state.VS),
+        .PS                    = GetShaderBytecode(state.PS),
+        .DS                    = GetShaderBytecode(state.DS),
+        .HS                    = GetShaderBytecode(state.HS),
+        .GS                    = GetShaderBytecode(state.GS),
+        .BlendState            = state.BlendState,
+        .SampleMask            = state.Multisampling.Mask,
+        .RasterizerState       = state.RasterizerState,
+        .DepthStencilState     = state.DepthStencilState,
+        .InputLayout           = state.InputLayout,
+        .PrimitiveTopologyType = state.TopologyType,
+        .NumRenderTargets      = state.RTVFormats[0] == DXGI_FORMAT_UNKNOWN ? 0u :
+                                 state.RTVFormats[1] == DXGI_FORMAT_UNKNOWN ? 1u :
+                                 state.RTVFormats[2] == DXGI_FORMAT_UNKNOWN ? 2u :
+                                 state.RTVFormats[3] == DXGI_FORMAT_UNKNOWN ? 3u :
+                                 state.RTVFormats[4] == DXGI_FORMAT_UNKNOWN ? 4u :
+                                 state.RTVFormats[5] == DXGI_FORMAT_UNKNOWN ? 5u :
+                                 state.RTVFormats[6] == DXGI_FORMAT_UNKNOWN ? 6u :
+                                 state.RTVFormats[7] == DXGI_FORMAT_UNKNOWN ? 7u :
+                                                                              8u,
+        .RTVFormats            { state.RTVFormats[0],
+                                 state.RTVFormats[1],
+                                 state.RTVFormats[2],
+                                 state.RTVFormats[3],
+                                 state.RTVFormats[4],
+                                 state.RTVFormats[5],
+                                 state.RTVFormats[6],
+                                 state.RTVFormats[7] },
+        .SampleDesc            { .Count = state.Multisampling.Count, .Quality = state.Multisampling.Quality },
+    };
+    ThrowIfFailed(device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&result)));
+    return result;
+}
+
+ComPtr<ID3D12Resource> CreateUploadBuffer(ComRef<ID3D12Device> const device, UINT const size)
+{
+    ComPtr<ID3D12Resource> uploadBuffer;
+    BufferDesc const bufferDesc{ size };
+    ThrowIfFailed(device->CreateCommittedResource(
+        &UploadHeapProperties,
+        D3D12_HEAP_FLAG_NONE,
+        &bufferDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&uploadBuffer)));
+
+    return uploadBuffer;
+}
+
+ComPtr<ID3D12Resource> AssetUploader::CreateStaticBuffer(
+    UINT                       const size,
+    D3D12_RESOURCE_STATES      const initialState,
+    std::function<void(void*)> const dataFill
+)
+{
+    ComPtr<ID3D12Resource> buffer;
+
+    auto uploadBuffer = CreateUploadBuffer(m_device, size);
+
+    // Copy the triangle data to the vertex buffer.
+    void* p;
+    ThrowIfFailed(uploadBuffer->Map(0, &NullRange, &p));
+    dataFill(p);
+    uploadBuffer->Unmap(0, nullptr);
+
+    D3D12_HEAP_PROPERTIES const heap{
+        .Type                 = D3D12_HEAP_TYPE_DEFAULT,
+        .CPUPageProperty      = D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+        .MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN,
+        .CreationNodeMask     = 1,
+        .VisibleNodeMask      = 1,
+    };
+    BufferDesc const bufferDesc{ size };
+    ThrowIfFailed(m_device->CreateCommittedResource(
+        &heap,
+        D3D12_HEAP_FLAG_NONE,
+        &bufferDesc,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        nullptr,
+        IID_PPV_ARGS(&buffer)));
+
+    m_commandList->CopyBufferRegion(buffer.Get(), 0, uploadBuffer.Get(), 0, size);
+
+    TransitionResource(m_commandList, buffer, D3D12_RESOURCE_STATE_COPY_DEST, initialState);
+
+    // Command lists are created in the recording state, but there is nothing
+    // to record yet. The main loop expects it to be closed, so close it now.
+    ThrowIfFailed(m_commandList->Close());
+    ExecuteCommandList(m_queue, m_commandList);
+    HoldPendingObject(std::move(uploadBuffer));
+    ThrowIfFailed(m_commandList->Reset(m_allocator.Get(), nullptr));
+
+    return buffer;
+}
+
+
+
+
+
+AssetUploader::AssetUploader(RenderDevice const& renderDevice)
+    : m_device     { renderDevice.device }
+    , m_queue      { renderDevice.commandQueue }
+    , m_allocator  { renderDevice.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }
+    , m_commandList{ renderDevice.CreateDirectCommandList(m_allocator) }
+    , m_fence      { renderDevice.device, renderDevice.commandQueue }
+{}
+
+AssetUploader::~AssetUploader()
+{
+    m_fence.WaitForGpuIdle();
+    // Now the pending objects can be deleted.
+}
+
+void AssetUploader::HoldPendingObject(ComPtr<IUnknown> o)
+{
+    m_pendingObjects.emplace_back(m_fence.SignalOnGpu(), std::move(o));
+    // TODO: Maybe look to see if we can delete some objects now?
 }
