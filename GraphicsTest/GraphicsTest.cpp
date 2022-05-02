@@ -29,6 +29,7 @@ struct VisibilityPass
     ComPtr<ID3D12RootSignature> RootSignature;
     ComPtr<ID3D12PipelineState> PipelineState;
     IntermediateRenderTarget    VisibilityBuffer;
+    IntermediateDepthBuffer     DepthBuffer;
 
     VisibilityPass(RenderDevice& renderDevice);
 
@@ -59,14 +60,16 @@ VisibilityPass::VisibilityPass(RenderDevice& renderDevice)
                 .InputLayout           { inputElementDescs, _countof(inputElementDescs) },
                 .VS                    = Compile(Shader{ L"model.hlsl", "VisibilityVS", "vs_5_0" }),
                 .PS                    = Compile(Shader{ L"model.hlsl", "VisibilityPS", "ps_5_0" }),
-                .DepthStencilState     = Pipeline::NoDepthStencil,
+                .DepthStencilState     = DefaultDepthStencilDesc,
                 .Multisampling         = Pipeline::NoMultisampling,
                 .RTVFormats            { DXGI_FORMAT_R32_UINT, },
+                .DSVFormat             = DXGI_FORMAT_D32_FLOAT,
             }
         );
     }
 
     VisibilityBuffer = CreateIntermediateRenderTarget(renderDevice, 1280, 720, DXGI_FORMAT_R32_UINT, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    DepthBuffer      = CreateIntermediateDepthBuffer (renderDevice, 1280, 720, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 }
 
 void VisibilityPass::StartPass(RenderDevice const& renderDevice) const
@@ -75,9 +78,11 @@ void VisibilityPass::StartPass(RenderDevice const& renderDevice) const
     renderDevice.commandList->SetPipelineState        (PipelineState.Get());
 
     TransitionResource(renderDevice.commandList, VisibilityBuffer.Resource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    TransitionResource(renderDevice.commandList, DepthBuffer     .Resource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_DEPTH_WRITE);
 
     auto const rtvHandle = renderDevice.rtvDescriptorHeap.GetCpuDescriptorHandle(VisibilityBuffer.RtvDescriptorIndex);
-    renderDevice.commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
+    auto const dsvHandle = renderDevice.dsvDescriptorHeap.GetCpuDescriptorHandle(DepthBuffer     .DsvDescriptorIndex);
+    renderDevice.commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
 
     D3D12_VIEWPORT const viewport   { 0, 0, static_cast<float>(VisibilityBuffer.Width), static_cast<float>(VisibilityBuffer.Height), D3D12_MIN_DEPTH, D3D12_MAX_DEPTH };
     D3D12_RECT     const scissorRect{ 0, 0, static_cast<LONG >(VisibilityBuffer.Width), static_cast<LONG >(VisibilityBuffer.Height) };
@@ -85,14 +90,15 @@ void VisibilityPass::StartPass(RenderDevice const& renderDevice) const
     renderDevice.commandList->RSSetViewports    (1, &viewport);
     renderDevice.commandList->RSSetScissorRects (1, &scissorRect);
 
-    // Record commands.
     static constexpr float clearColor[4]{};
     renderDevice.commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
+    renderDevice.commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1e20f, 0, 0, nullptr);
 }
 
 void VisibilityPass::EndPass(RenderDevice const& renderDevice) const
 {
     TransitionResource(renderDevice.commandList, VisibilityBuffer.Resource, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    TransitionResource(renderDevice.commandList, DepthBuffer     .Resource, D3D12_RESOURCE_STATE_DEPTH_WRITE  , D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 }
 
 
@@ -403,7 +409,7 @@ struct Assets
 
     std::shared_ptr<VisibilityPass> visibilityPass;
     std::shared_ptr<ColorPass>      colorPass;
-    std::shared_ptr<Instance>       cubeInstance;
+    std::shared_ptr<Instance>       cubeInstances[2];
     std::shared_ptr<Model>          cube;
 };
 
@@ -550,10 +556,11 @@ Assets LoadAssets(RenderDevice& renderDevice)
 
     assets.model = LoadCube(uploader, renderDevice);
 
-    assets.visibilityPass = std::make_shared<VisibilityPass>(renderDevice);
-    assets.colorPass      = std::make_shared<ColorPass>     (renderDevice);
-    assets.cubeInstance   = std::make_shared<Instance>      (renderDevice);
-    assets.cube           = std::make_shared<Model>         (CreateCubeModel(uploader, renderDevice));
+    assets.visibilityPass   = std::make_shared<VisibilityPass>(renderDevice);
+    assets.colorPass        = std::make_shared<ColorPass>     (renderDevice);
+    assets.cubeInstances[0] = std::make_shared<Instance>      (renderDevice);
+    assets.cubeInstances[1] = std::make_shared<Instance>      (renderDevice);
+    assets.cube             = std::make_shared<Model>         (CreateCubeModel(uploader, renderDevice));
 
     return assets;
 }
@@ -592,7 +599,8 @@ void RenderFrame(RenderDevice& renderDevice, Assets const& assets)
     }
 
     assets.visibilityPass->StartPass(renderDevice);
-    DrawModelInstance(renderDevice, *assets.cube, *assets.cubeInstance, 1);
+    DrawModelInstance(renderDevice, *assets.cube, *assets.cubeInstances[0], 1);
+    DrawModelInstance(renderDevice, *assets.cube, *assets.cubeInstances[1], 2);
     assets.visibilityPass->EndPass(renderDevice);
 
 
@@ -654,7 +662,8 @@ void AnimateAssets(Assets const& assets)
 
     XMStoreFloat4x4(&assets.model.ConstantBuffer->Projection, XMMatrixTranspose(model * ViewProj));
 
-    UpdateModelInstance(*assets.cubeInstance);
+    UpdateModelInstance(*assets.cubeInstances[0]);
+    UpdateModelInstance(*assets.cubeInstances[1]);
 }
 
 RenderDevice* pRenderDevice;

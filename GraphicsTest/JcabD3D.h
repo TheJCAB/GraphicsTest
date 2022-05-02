@@ -240,6 +240,22 @@ struct BufferDesc : D3D12_RESOURCE_DESC
     {}
 };
 
+constexpr D3D12_DEPTH_STENCILOP_DESC DefaultStencilOp
+{
+    .StencilFailOp      = D3D12_STENCIL_OP_KEEP,
+    .StencilDepthFailOp = D3D12_STENCIL_OP_KEEP,
+    .StencilPassOp      = D3D12_STENCIL_OP_KEEP,
+    .StencilFunc        = D3D12_COMPARISON_FUNC_ALWAYS,
+};
+
+constexpr D3D12_DEPTH_STENCIL_DESC DefaultDepthStencilDesc
+{
+    .DepthEnable      = TRUE,
+    .DepthWriteMask   = D3D12_DEPTH_WRITE_MASK_ALL,
+    .DepthFunc        = D3D12_COMPARISON_FUNC_LESS,
+    .StencilEnable    = FALSE,
+};
+
 
 
 ComPtr<ID3D12Resource> CreateUploadConstantBuffer(ComRef<ID3D12Device>, UINT size, D3D12_RESOURCE_STATES initState = D3D12_RESOURCE_STATE_GENERIC_READ);
@@ -545,5 +561,21 @@ IntermediateRenderTarget CreateIntermediateRenderTarget(
     UINT                  width,
     UINT                  height,
     DXGI_FORMAT           ,
+    D3D12_RESOURCE_STATES initialState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+);
+
+struct IntermediateDepthBuffer
+{
+    UINT                   Width              = 0;
+    UINT                   Height             = 0;
+    ComPtr<ID3D12Resource> Resource           {};
+    UINT                   DsvDescriptorIndex = 0;
+    UINT                   SrvDescriptorIndex = 0;
+};
+
+IntermediateDepthBuffer CreateIntermediateDepthBuffer(
+    RenderDevice&         ,
+    UINT                  width,
+    UINT                  height,
     D3D12_RESOURCE_STATES initialState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
 );

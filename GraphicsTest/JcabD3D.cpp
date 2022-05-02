@@ -608,3 +608,73 @@ IntermediateRenderTarget CreateIntermediateRenderTarget(
 
     return renderTarget;
 }
+
+IntermediateDepthBuffer CreateIntermediateDepthBuffer(
+    RenderDevice&               renderDevice,
+    UINT                  const width,
+    UINT                  const height,
+    D3D12_RESOURCE_STATES const initialState
+)
+{
+    IntermediateDepthBuffer depthBuffer
+    {
+        .Width  = width ,
+        .Height = height,
+    };
+        
+    D3D12_HEAP_PROPERTIES const heap{
+        .Type                 = D3D12_HEAP_TYPE_DEFAULT,
+        .CPUPageProperty      = D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+        .MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN,
+        .CreationNodeMask     = 1,
+        .VisibleNodeMask      = 1,
+    };
+    D3D12_RESOURCE_DESC const desc{
+        .Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+        .Alignment        = 0,
+        .Width            = width,
+        .Height           = height,
+        .DepthOrArraySize = 1,
+        .MipLevels        = 1,
+        .Format           = DXGI_FORMAT_D32_FLOAT,
+        .SampleDesc       { .Count = 1, .Quality = 0 },
+        .Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN,
+        .Flags            = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL,
+    };
+    D3D12_CLEAR_VALUE const clear
+    {
+        .Format = DXGI_FORMAT_D32_FLOAT,
+    };
+    ThrowIfFailed(renderDevice.device->CreateCommittedResource(
+        &heap,
+        D3D12_HEAP_FLAG_NONE,
+        &desc,
+        initialState,
+        &clear,
+        IID_PPV_ARGS(&depthBuffer.Resource)
+    ));
+
+    // Create frame resources.
+    {
+        depthBuffer.DsvDescriptorIndex = renderDevice.dsvDescriptorHeap.AllocateDescriptors(1);
+        auto handle = renderDevice.dsvDescriptorHeap.GetCpuDescriptorHandle(depthBuffer.DsvDescriptorIndex);
+
+        // Create a RTV and a command allocator for each frame.
+        renderDevice.device->CreateDepthStencilView(depthBuffer.Resource.Get(), nullptr, handle);
+    }
+
+    {
+        depthBuffer.SrvDescriptorIndex = renderDevice.srvDescriptorHeap.AllocateDescriptors(1);
+        auto handle = renderDevice.srvDescriptorHeap.GetCpuDescriptorHandle(depthBuffer.SrvDescriptorIndex);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC const srvDesc{
+            .Format                  = DXGI_FORMAT_R32_FLOAT,
+            .ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D,
+            .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+            .Texture2D               { .MipLevels = 1 },
+        };
+        renderDevice.device->CreateShaderResourceView(depthBuffer.Resource.Get(), &srvDesc, handle);
+    }
+
+    return depthBuffer;
+}
