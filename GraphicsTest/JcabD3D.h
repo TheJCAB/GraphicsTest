@@ -113,7 +113,10 @@ struct RenderDevice
     ComPtr<ID3D12CommandQueue> commandQueue;
     ComPtr<IDXGISwapChain3>    swapChain;
 
-    DescriptorHeap<D3D12_DESCRIPTOR_HEAP_TYPE_RTV> rtvDescriptorHeap;
+    DescriptorHeap<D3D12_DESCRIPTOR_HEAP_TYPE_RTV        > rtvDescriptorHeap;
+    DescriptorHeap<D3D12_DESCRIPTOR_HEAP_TYPE_DSV        > dsvDescriptorHeap;
+    DescriptorHeap<D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV> srvDescriptorHeap;
+    DescriptorHeap<D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER    > samplerDescriptorHeap;
 
     D3D12_VIEWPORT               viewport;
     D3D12_RECT                   scissorRect;
@@ -145,6 +148,7 @@ struct RenderDevice
 
     void WaitForGpuIdle() { fence->WaitForGpuIdle(); }
 
+    void StartFrame  ();
     void PresentFrame();
 
     static RenderDevice Create(HWND const hwnd);
@@ -335,11 +339,11 @@ template < D3D12_SHADER_VISIBILITY visibility, typename... ranges > struct Table
     };
 };
 
-template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space, D3D12_ROOT_DESCRIPTOR_FLAGS flags > struct Cbv
+template < D3D12_ROOT_PARAMETER_TYPE type, D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space, D3D12_ROOT_DESCRIPTOR_FLAGS flags > struct Descriptor
 {
     static constexpr D3D12_ROOT_PARAMETER1 Parameter
     {
-        .ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV,
+        .ParameterType = type,
         .Descriptor{
             .ShaderRegister = reg,
             .RegisterSpace  = space,
@@ -348,6 +352,9 @@ template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space, D3D12_ROOT_
         .ShaderVisibility = visibility,
     };
 };
+
+template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space, D3D12_ROOT_DESCRIPTOR_FLAGS flags > using Cbv = Descriptor<D3D12_ROOT_PARAMETER_TYPE_CBV, visibility, reg, space, flags>;
+template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space, D3D12_ROOT_DESCRIPTOR_FLAGS flags > using Srv = Descriptor<D3D12_ROOT_PARAMETER_TYPE_SRV, visibility, reg, space, flags>;
 
 
 
@@ -398,12 +405,12 @@ public:
     operator D3D12_ROOT_SIGNATURE_DESC1 const&() const { return Desc; }
 };
 
-template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space, D3D12_ROOT_DESCRIPTOR_FLAGS flags, typename... args > struct SignatureDescription<Cbv<visibility, reg, space, flags>, args...>
+template < D3D12_ROOT_PARAMETER_TYPE type, D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space, D3D12_ROOT_DESCRIPTOR_FLAGS flags, typename... args > struct SignatureDescription<Descriptor<type, visibility, reg, space, flags>, args...>
 {
 private:
     using Next = SignatureDescription<args...>;
 public:
-    static constexpr auto Parameters = Next::Parameters.Cons<Cbv<visibility, reg, space, flags>>;
+    static constexpr auto Parameters = Next::Parameters.Cons<Descriptor<type, visibility, reg, space, flags>>;
     static constexpr D3D12_ROOT_SIGNATURE_DESC1 Desc{
         .NumParameters     = Parameters.Size             ,
         .pParameters       = Parameters.Data             ,
@@ -521,3 +528,22 @@ private:
 
     std::vector<PendingObject> m_pendingObjects;
 };
+
+
+
+struct IntermediateRenderTarget
+{
+    UINT                   Width              = 0;
+    UINT                   Height             = 0;
+    ComPtr<ID3D12Resource> Resource           {};
+    UINT                   RtvDescriptorIndex = 0;
+    UINT                   SrvDescriptorIndex = 0;
+};
+
+IntermediateRenderTarget CreateIntermediateRenderTarget(
+    RenderDevice&         ,
+    UINT                  width,
+    UINT                  height,
+    DXGI_FORMAT           ,
+    D3D12_RESOURCE_STATES initialState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+);

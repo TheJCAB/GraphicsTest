@@ -8,31 +8,286 @@
 #include <array>
 #include <filesystem>
 
+XMMATRIX ViewProj;
+
+struct InstanceConstantBuffer
+{
+    XMFLOAT4X4 Projection;
+    uint32_t   InstanceIndex;
+};
+
+
+struct VertexPosition
+{
+    XMFLOAT3 position;
+};
+
+
+
+struct VisibilityPass
+{
+    ComPtr<ID3D12RootSignature> RootSignature;
+    ComPtr<ID3D12PipelineState> PipelineState;
+    IntermediateRenderTarget    VisibilityBuffer;
+
+    VisibilityPass(RenderDevice& renderDevice);
+
+    void StartPass(RenderDevice const&) const;
+    void EndPass  (RenderDevice const&) const;
+};
+
+VisibilityPass::VisibilityPass(RenderDevice& renderDevice)
+{
+    // Create the rendering root signature.
+    RootSignature = renderDevice.CreateRootSignature<
+        Root::Cbv<D3D12_SHADER_VISIBILITY_ALL, 0, 0, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC>,
+        Root::Flags<D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT>
+    >();
+
+    // Create the pipeline state, which includes compiling and loading shaders.
+    {
+        // Define the vertex input layout.
+        D3D12_INPUT_ELEMENT_DESC const inputElementDescs[] =
+        {
+            { .SemanticName = "POSITION", .SemanticIndex = 0, .Format = DXGI_FORMAT_R32G32B32_FLOAT, .InputSlot = 0, .AlignedByteOffset =  0, .InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, .InstanceDataStepRate = 0 },
+        };
+
+        PipelineState = renderDevice.Create(Pipeline::State
+            {
+                .RootSignature         { RootSignature },
+                .TopologyType          = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+                .InputLayout           { inputElementDescs, _countof(inputElementDescs) },
+                .VS                    = Compile(Shader{ L"model.hlsl", "VisibilityVS", "vs_5_0" }),
+                .PS                    = Compile(Shader{ L"model.hlsl", "VisibilityPS", "ps_5_0" }),
+                .DepthStencilState     = Pipeline::NoDepthStencil,
+                .Multisampling         = Pipeline::NoMultisampling,
+                .RTVFormats            { DXGI_FORMAT_R32_UINT, },
+            }
+        );
+    }
+
+    VisibilityBuffer = CreateIntermediateRenderTarget(renderDevice, 1280, 720, DXGI_FORMAT_R32_UINT, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+}
+
+void VisibilityPass::StartPass(RenderDevice const& renderDevice) const
+{
+    renderDevice.commandList->SetGraphicsRootSignature(RootSignature.Get());
+    renderDevice.commandList->SetPipelineState        (PipelineState.Get());
+
+    TransitionResource(renderDevice.commandList, VisibilityBuffer.Resource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+
+    auto const rtvHandle = renderDevice.rtvDescriptorHeap.GetCpuDescriptorHandle(VisibilityBuffer.RtvDescriptorIndex);
+    renderDevice.commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
+
+    D3D12_VIEWPORT const viewport   { 0, 0, static_cast<float>(VisibilityBuffer.Width), static_cast<float>(VisibilityBuffer.Height), D3D12_MIN_DEPTH, D3D12_MAX_DEPTH };
+    D3D12_RECT     const scissorRect{ 0, 0, static_cast<LONG >(VisibilityBuffer.Width), static_cast<LONG >(VisibilityBuffer.Height) };
+
+    renderDevice.commandList->RSSetViewports    (1, &viewport);
+    renderDevice.commandList->RSSetScissorRects (1, &scissorRect);
+
+    // Record commands.
+    static constexpr float clearColor[4]{};
+    renderDevice.commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
+}
+
+void VisibilityPass::EndPass(RenderDevice const& renderDevice) const
+{
+    TransitionResource(renderDevice.commandList, VisibilityBuffer.Resource, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+}
+
+
+
+
+struct ColorPass
+{
+    ComPtr<ID3D12RootSignature> RootSignature;
+    ComPtr<ID3D12PipelineState> PipelineState;
+
+    ColorPass(RenderDevice& renderDevice);
+
+    void StartPass(RenderDevice const&, IntermediateRenderTarget const&) const;
+    void EndPass  (RenderDevice const&) const;
+};
+
+ColorPass::ColorPass(RenderDevice& renderDevice)
+{
+    // Create the rendering root signature.
+    RootSignature = renderDevice.CreateRootSignature<
+        Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SrvRange<0, 1>>,
+        Root::Flags<D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT>
+    >();
+
+    // Create the pipeline state, which includes compiling and loading shaders.
+    PipelineState = renderDevice.Create(Pipeline::State
+        {
+            .RootSignature         { RootSignature },
+            .TopologyType          = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+            .VS                    = Compile(Shader{ L"model.hlsl", "ColorVS", "vs_5_0" }),
+            .PS                    = Compile(Shader{ L"model.hlsl", "ColorPS", "ps_5_0" }),
+            .DepthStencilState     = Pipeline::NoDepthStencil,
+            .Multisampling         = Pipeline::NoMultisampling,
+            .RTVFormats            { DXGI_FORMAT_R8G8B8A8_UNORM, },
+        }
+    );
+}
+
+void ColorPass::StartPass(RenderDevice const& renderDevice, IntermediateRenderTarget const& visibilityBuffer) const
+{
+    renderDevice.commandList->SetGraphicsRootSignature(RootSignature.Get());
+    renderDevice.commandList->SetPipelineState        (PipelineState.Get());
+
+    ID3D12DescriptorHeap* const heaps[]{ renderDevice.srvDescriptorHeap };
+    renderDevice.commandList->SetDescriptorHeaps(1, heaps);
+    renderDevice.commandList->SetGraphicsRootDescriptorTable(0, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(visibilityBuffer.SrvDescriptorIndex));
+}
+
+void ColorPass::EndPass(RenderDevice const& renderDevice) const
+{
+}
+
+
+
+struct Model
+{
+    uint32_t                 VertexCount               = 0;
+    ComPtr<ID3D12Resource>   PositionsBuffer           {};
+    D3D12_VERTEX_BUFFER_VIEW PositionsVertexBufferView {};
+};
+
+
+
+
+struct Instance
+{
+    uint16_t yaw   = 0;
+    uint16_t pitch = 0;
+    uint16_t roll  = 0;
+
+    ConstantBuffer<InstanceConstantBuffer> Constants{};
+
+    Instance(RenderDevice& renderDevice);
+};
+
+void UpdateModelInstance(Instance& instance)
+{
+    instance.yaw   += 0x50;
+    instance.pitch += 0x77;
+    instance.roll  += 0x23;
+};
+
+void DrawModelInstance(RenderDevice const& renderDevice, Model const& model, Instance const& instance, uint32_t const instanceIndex)
+{
+    XMMATRIX const modelMatrix = XMMatrixRotationRollPitchYaw(instance.pitch * (2.0f * XM_PI / 65536.0f), instance.yaw * (2.0f * XM_PI / 65536.0f), instance.roll * (2.0f * XM_PI / 65536.0));
+
+    XMStoreFloat4x4(&instance.Constants->Projection, XMMatrixTranspose(modelMatrix * ViewProj));
+    instance.Constants->InstanceIndex = instanceIndex << 20;
+
+    renderDevice.commandList->IASetPrimitiveTopology           (D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    renderDevice.commandList->IASetVertexBuffers               (0, 1, &model.PositionsVertexBufferView);
+    renderDevice.commandList->SetGraphicsRootConstantBufferView(0, instance.Constants);
+    renderDevice.commandList->DrawInstanced                    (model.VertexCount, 1, 0, 0);
+}
+
+Instance::Instance(RenderDevice& renderDevice)
+{
+    Constants = Constants.Create(renderDevice.device.Get());
+
+    yaw   = rand();
+    pitch = rand();
+    roll  = rand();
+}
+
+
+Model CreateCubeModel(AssetUploader& uploader, RenderDevice& renderDevice)
+{
+    Model model{};
+
+    // Create the vertex buffer for the cube.
+    static constexpr VertexPosition triangleVertices[] =
+    {
+        { {  1.0f,  1.0f,  1.0f } },
+        { {  1.0f,  1.0f, -1.0f } },
+        { {  1.0f, -1.0f,  1.0f } },
+        { {  1.0f, -1.0f,  1.0f } },
+        { {  1.0f,  1.0f, -1.0f } },
+        { {  1.0f, -1.0f, -1.0f } },
+
+        { { -1.0f,  1.0f,  1.0f } },
+        { { -1.0f, -1.0f,  1.0f } },
+        { { -1.0f,  1.0f, -1.0f } },
+        { { -1.0f,  1.0f, -1.0f } },
+        { { -1.0f, -1.0f,  1.0f } },
+        { { -1.0f, -1.0f, -1.0f } },
+
+        { {  1.0f,  1.0f,  1.0f } },
+        { {  1.0f, -1.0f,  1.0f } },
+        { { -1.0f,  1.0f,  1.0f } },
+        { { -1.0f,  1.0f,  1.0f } },
+        { {  1.0f, -1.0f,  1.0f } },
+        { { -1.0f, -1.0f,  1.0f } },
+
+        { {  1.0f,  1.0f, -1.0f } },
+        { { -1.0f,  1.0f, -1.0f } },
+        { {  1.0f, -1.0f, -1.0f } },
+        { {  1.0f, -1.0f, -1.0f } },
+        { { -1.0f,  1.0f, -1.0f } },
+        { { -1.0f, -1.0f, -1.0f } },
+
+        { {  1.0f,  1.0f,  1.0f } },
+        { { -1.0f,  1.0f,  1.0f } },
+        { {  1.0f,  1.0f, -1.0f } },
+        { {  1.0f,  1.0f, -1.0f } },
+        { { -1.0f,  1.0f,  1.0f } },
+        { { -1.0f,  1.0f, -1.0f } },
+
+        { {  1.0f, -1.0f,  1.0f } },
+        { {  1.0f, -1.0f, -1.0f } },
+        { { -1.0f, -1.0f,  1.0f } },
+        { { -1.0f, -1.0f,  1.0f } },
+        { {  1.0f, -1.0f, -1.0f } },
+        { { -1.0f, -1.0f, -1.0f } },
+    };
+
+    model.VertexCount = std::size(triangleVertices);
+
+    model.PositionsBuffer = uploader.CreateStaticBuffer(sizeof(triangleVertices), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
+        [&](void* p)
+        {
+            memcpy(p, triangleVertices, sizeof(triangleVertices));
+        }
+    );
+
+    // Initialize the vertex buffer view.
+    model.PositionsVertexBufferView.BufferLocation = model.PositionsBuffer->GetGPUVirtualAddress();
+    model.PositionsVertexBufferView.StrideInBytes  = sizeof(triangleVertices[0]);
+    model.PositionsVertexBufferView.SizeInBytes    = sizeof(triangleVertices);
+
+    return model;
+}
+
+
+
+
 // Load the sample assets.
-struct ModelVertex
+struct CubeVertex
 {
     XMFLOAT3 position;
     uint32_t color;
 
 };
 
-struct SceneConstantBuffer
+struct Cube
 {
-    XMFLOAT4X4 projection;
+    ComPtr<ID3D12RootSignature>            RootSignature   ;
+    ComPtr<ID3D12PipelineState>            PipelineState   ;
+    ConstantBuffer<InstanceConstantBuffer> ConstantBuffer  ;
+    ComPtr<ID3D12Resource>                 VertexBuffer    ;
+    D3D12_VERTEX_BUFFER_VIEW               VertexBufferView;
 };
 
-struct Model
+Cube LoadCube(AssetUploader& uploader, RenderDevice& renderDevice)
 {
-    ComPtr<ID3D12RootSignature>         RootSignature   ;
-    ComPtr<ID3D12PipelineState>         PipelineState   ;
-    ConstantBuffer<SceneConstantBuffer> ConstantBuffer  ;
-    ComPtr<ID3D12Resource>              VertexBuffer    ;
-    D3D12_VERTEX_BUFFER_VIEW            VertexBufferView;
-};
-
-Model LoadModel(AssetUploader& uploader, RenderDevice& renderDevice)
-{
-    Model model{};
+    Cube model{};
 
     // Create the rendering root signature.
     model.RootSignature = renderDevice.CreateRootSignature<
@@ -54,8 +309,8 @@ Model LoadModel(AssetUploader& uploader, RenderDevice& renderDevice)
                 .RootSignature         { model.RootSignature },
                 .TopologyType          = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
                 .InputLayout           { inputElementDescs, _countof(inputElementDescs) },
-                .VS                    = Compile(Shader{ L"model.hlsl", "VSModel", "vs_5_0" }),
-                .PS                    = Compile(Shader{ L"model.hlsl", "PSModel", "ps_5_0" }),
+                .VS                    = Compile(Shader{ L"model.hlsl", "VSCube", "vs_5_0" }),
+                .PS                    = Compile(Shader{ L"model.hlsl", "PSCube", "ps_5_0" }),
                 .DepthStencilState     = Pipeline::NoDepthStencil,
                 .Multisampling         = Pipeline::NoMultisampling,
                 .RTVFormats            { DXGI_FORMAT_R8G8B8A8_UNORM, },
@@ -67,10 +322,8 @@ Model LoadModel(AssetUploader& uploader, RenderDevice& renderDevice)
 
     // Create the vertex buffer.
     {
-        constexpr auto aspectRatio = 1280.0f / 712.0f;
-
         // Define the geometry for a triangle.
-        static constexpr ModelVertex triangleVertices[] =
+        static constexpr CubeVertex triangleVertices[] =
         {
             { {  1.0f,  1.0f,  1.0f }, 0xFF'FF'00'00 },
             { {  1.0f,  1.0f, -1.0f }, 0xFF'FF'00'00 },
@@ -134,24 +387,24 @@ Model LoadModel(AssetUploader& uploader, RenderDevice& renderDevice)
 
 struct Assets
 {
-    DescriptorHeap<D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV> srvDescriptorHeap;
-    DescriptorHeap<D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER    > samplerDescriptorHeap;
-
     ComPtr<ID3D12RootSignature>       rootSignature;
 
-    ComPtr<ID3D12Resource>            objectTarget;
-    UINT                              objectTargetRtvDescriptorIndex;
-    UINT                              objectTargetSrvDescriptorIndex;
+    IntermediateRenderTarget             objectTarget;
     ComPtr<ID3D12PipelineState>       objectTargetPipelineState;
 
     UINT                              objectTargetSampleWrapDescriptorIndex;
 
-    Model                             model;
+    Cube                              model;
 
     ComPtr<ID3D12RootSignature>       renderSignature;
     ComPtr<ID3D12PipelineState>       pipelineState;
     ComPtr<ID3D12Resource>            vertexBuffer;
     D3D12_VERTEX_BUFFER_VIEW          vertexBufferView;
+
+    std::shared_ptr<VisibilityPass> visibilityPass;
+    std::shared_ptr<ColorPass>      colorPass;
+    std::shared_ptr<Instance>       cubeInstance;
+    std::shared_ptr<Model>          cube;
 };
 
 Assets LoadAssets(RenderDevice& renderDevice)
@@ -159,9 +412,6 @@ Assets LoadAssets(RenderDevice& renderDevice)
     Assets assets{};
 
     AssetUploader uploader{ renderDevice };
-
-    assets.srvDescriptorHeap     = assets.srvDescriptorHeap    .Create(renderDevice.device.Get(), 10, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
-    assets.samplerDescriptorHeap = assets.samplerDescriptorHeap.Create(renderDevice.device.Get(), 10, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
 
     // Create an empty root signature.
     assets.rootSignature = renderDevice.CreateRootSignature<
@@ -176,66 +426,11 @@ Assets LoadAssets(RenderDevice& renderDevice)
     >();
 
     // Create rendering surfaces.
-    {
-        
-        D3D12_HEAP_PROPERTIES const heap{
-            .Type                 = D3D12_HEAP_TYPE_DEFAULT,
-            .CPUPageProperty      = D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
-            .MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN,
-            .CreationNodeMask     = 1,
-            .VisibleNodeMask      = 1,
-        };
-        D3D12_RESOURCE_DESC const desc{
-            .Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-            .Alignment        = 0,
-            .Width            = 1280,
-            .Height           = 720,
-            .DepthOrArraySize = 1,
-            .MipLevels        = 1,
-            .Format           = DXGI_FORMAT_R32_UINT,
-            .SampleDesc       { .Count = 1, .Quality = 0 },
-            .Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN,
-            .Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
-        };
-        D3D12_CLEAR_VALUE const clear
-        {
-            .Format = DXGI_FORMAT_R32_UINT,
-        };
-        ThrowIfFailed(renderDevice.device->CreateCommittedResource(
-            &heap,
-            D3D12_HEAP_FLAG_NONE,
-            &desc,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            &clear,
-            IID_PPV_ARGS(&assets.objectTarget)
-        ));
-
-        // Create frame resources.
-        {
-            assets.objectTargetRtvDescriptorIndex = renderDevice.rtvDescriptorHeap.AllocateDescriptors(1);
-            auto handle = renderDevice.rtvDescriptorHeap.GetCpuDescriptorHandle(assets.objectTargetRtvDescriptorIndex);
-
-            // Create a RTV and a command allocator for each frame.
-            renderDevice.device->CreateRenderTargetView(assets.objectTarget.Get(), nullptr, handle);
-        }
-
-        {
-            assets.objectTargetSrvDescriptorIndex = assets.srvDescriptorHeap.AllocateDescriptors(1);
-            auto handle = assets.srvDescriptorHeap.GetCpuDescriptorHandle(assets.objectTargetSrvDescriptorIndex);
-
-            D3D12_SHADER_RESOURCE_VIEW_DESC const srvDesc{
-                .Format                  = DXGI_FORMAT_R32_UINT,
-                .ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D,
-                .Shader4ComponentMapping = D3D12_ENCODE_SHADER_4_COMPONENT_MAPPING(0, 0, 0, 0),
-                .Texture2D               { .MipLevels = 1 },
-            };
-            renderDevice.device->CreateShaderResourceView(assets.objectTarget.Get(), &srvDesc, handle);
-        }
-    }
+    assets.objectTarget = CreateIntermediateRenderTarget(renderDevice, 1280, 720, DXGI_FORMAT_R32_UINT, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
     {
-        assets.objectTargetSampleWrapDescriptorIndex = assets.samplerDescriptorHeap.AllocateDescriptors(1);
-        auto handle = assets.samplerDescriptorHeap.GetCpuDescriptorHandle(assets.objectTargetSampleWrapDescriptorIndex);
+        assets.objectTargetSampleWrapDescriptorIndex = renderDevice.samplerDescriptorHeap.AllocateDescriptors(1);
+        auto handle = renderDevice.samplerDescriptorHeap.GetCpuDescriptorHandle(assets.objectTargetSampleWrapDescriptorIndex);
 
         D3D12_SAMPLER_DESC const wrapSamplerDesc
         {
@@ -353,12 +548,17 @@ Assets LoadAssets(RenderDevice& renderDevice)
         assets.vertexBufferView.SizeInBytes    = vertexBufferSize;
     }
 
-    assets.model = LoadModel(uploader, renderDevice);
+    assets.model = LoadCube(uploader, renderDevice);
+
+    assets.visibilityPass = std::make_shared<VisibilityPass>(renderDevice);
+    assets.colorPass      = std::make_shared<ColorPass>     (renderDevice);
+    assets.cubeInstance   = std::make_shared<Instance>      (renderDevice);
+    assets.cube           = std::make_shared<Model>         (CreateCubeModel(uploader, renderDevice));
 
     return assets;
 }
 
-void PopulateCommandList(RenderDevice const& renderDevice, Assets const& assets)
+void RenderFrame(RenderDevice& renderDevice, Assets const& assets)
 {
     auto const& commandAllocator = renderDevice.commandAllocators[renderDevice.frameIndex];
 
@@ -376,38 +576,38 @@ void PopulateCommandList(RenderDevice const& renderDevice, Assets const& assets)
     {
         renderDevice.commandList->SetPipelineState(assets.objectTargetPipelineState.Get());
         renderDevice.commandList->SetGraphicsRootSignature(assets.rootSignature.Get());
-        TransitionResource(renderDevice.commandList, assets.objectTarget, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
-        auto const rtvHandle = renderDevice.rtvDescriptorHeap.GetCpuDescriptorHandle(assets.objectTargetRtvDescriptorIndex);
+    
+        TransitionResource(renderDevice.commandList, assets.objectTarget.Resource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        auto const rtvHandle = renderDevice.rtvDescriptorHeap.GetCpuDescriptorHandle(assets.objectTarget.RtvDescriptorIndex);
         renderDevice.commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
         renderDevice.commandList->RSSetViewports    (1, &renderDevice.viewport);
         renderDevice.commandList->RSSetScissorRects (1, &renderDevice.scissorRect);
-
+    
         float const clearColor[4]{};
         renderDevice.commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
         renderDevice.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         renderDevice.commandList->DrawInstanced(3, 1, 0, 0);
-
-        TransitionResource(renderDevice.commandList, assets.objectTarget, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    
+        TransitionResource(renderDevice.commandList, assets.objectTarget.Resource, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
 
-    // Indicate that the back buffer will be used as a render target.
-    TransitionResource(renderDevice.commandList, renderDevice.renderTargets[renderDevice.frameIndex], D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    assets.visibilityPass->StartPass(renderDevice);
+    DrawModelInstance(renderDevice, *assets.cube, *assets.cubeInstance, 1);
+    assets.visibilityPass->EndPass(renderDevice);
+
+
+
+    renderDevice.StartFrame();
 
     renderDevice.commandList->SetGraphicsRootSignature(assets.renderSignature.Get());
     renderDevice.commandList->SetPipelineState(assets.pipelineState.Get());
 
-    ID3D12DescriptorHeap* const heaps[]{ assets.srvDescriptorHeap, assets.samplerDescriptorHeap };
+    ID3D12DescriptorHeap* const heaps[]{ renderDevice.srvDescriptorHeap, renderDevice.samplerDescriptorHeap };
     renderDevice.commandList->SetDescriptorHeaps(2, heaps);
-    renderDevice.commandList->SetGraphicsRootDescriptorTable(0, assets.srvDescriptorHeap    .GetGpuDescriptorHandle(assets.objectTargetSrvDescriptorIndex));
-    renderDevice.commandList->SetGraphicsRootDescriptorTable(1, assets.samplerDescriptorHeap.GetGpuDescriptorHandle(assets.objectTargetSampleWrapDescriptorIndex));
-    auto const rtvHandle = renderDevice.rtvDescriptorHeap.GetCpuDescriptorHandle(renderDevice.frameIndex);
-    renderDevice.commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
-    renderDevice.commandList->RSSetViewports    (1, &renderDevice.viewport);
-    renderDevice.commandList->RSSetScissorRects (1, &renderDevice.scissorRect);
+    renderDevice.commandList->SetGraphicsRootDescriptorTable(0, renderDevice.srvDescriptorHeap    .GetGpuDescriptorHandle(assets.objectTarget.SrvDescriptorIndex));
+    renderDevice.commandList->SetGraphicsRootDescriptorTable(1, renderDevice.samplerDescriptorHeap.GetGpuDescriptorHandle(assets.objectTargetSampleWrapDescriptorIndex));
 
     // Record commands.
-    const float clearColor[] = { 0.0f, 0.2f, 0.4f, 1.0f };
-    renderDevice.commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
     renderDevice.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     renderDevice.commandList->IASetVertexBuffers(0, 1, &assets.vertexBufferView);
     renderDevice.commandList->DrawInstanced(3, 1, 0, 0);
@@ -422,11 +622,11 @@ void PopulateCommandList(RenderDevice const& renderDevice, Assets const& assets)
     renderDevice.commandList->SetGraphicsRootConstantBufferView(0, assets.model.ConstantBuffer);
     renderDevice.commandList->DrawInstanced(3 * 2 * 6, 1, 0, 0);
 
+    assets.colorPass->StartPass(renderDevice, assets.visibilityPass->VisibilityBuffer);
+    renderDevice.commandList->DrawInstanced(3, 1, 0, 0);
+    assets.colorPass->EndPass(renderDevice);
 
-
-    TransitionResource(renderDevice.commandList, renderDevice.renderTargets[renderDevice.frameIndex], D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
-
-    ThrowIfFailed(renderDevice.commandList->Close());
+    renderDevice.PresentFrame();
 }
 
 // Prepare to render the next frame.
@@ -450,7 +650,11 @@ void AnimateAssets(Assets const& assets)
     float const fovRadiansY = fovAngleY * XM_PI / 180.0f;
     XMMATRIX proj = XMMatrixPerspectiveFovRH(fovRadiansY, 1280.0 / 720.0, 0.01f, 125.0f);
 
-    XMStoreFloat4x4(&assets.model.ConstantBuffer->projection, XMMatrixTranspose(model * view * proj));
+    ViewProj = view * proj;
+
+    XMStoreFloat4x4(&assets.model.ConstantBuffer->Projection, XMMatrixTranspose(model * ViewProj));
+
+    UpdateModelInstance(*assets.cubeInstance);
 }
 
 RenderDevice* pRenderDevice;
@@ -479,12 +683,7 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPara
 
     case WM_PAINT:
         // Record all the commands we need to render the scene into the command list.
-        PopulateCommandList(*pRenderDevice, *pAssets);
-
-        // Execute the command list.
-        pRenderDevice->ExecuteCommandList(pRenderDevice->commandList);
-
-        pRenderDevice->PresentFrame();
+        RenderFrame(*pRenderDevice, *pAssets);
 
         AnimateAssets(*pAssets);
 

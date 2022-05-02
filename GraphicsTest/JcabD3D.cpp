@@ -213,7 +213,10 @@ RenderDevice RenderDevice::Create(HWND const hwnd)
     renderDevice.scissorRect = D3D12_RECT    { 0, 0, 1280, 720 };
 
     // Create descriptor heaps.
-    renderDevice.rtvDescriptorHeap = renderDevice.rtvDescriptorHeap.Create(renderDevice.device.Get(), 10);
+    renderDevice.rtvDescriptorHeap     = renderDevice.rtvDescriptorHeap    .Create(renderDevice.device.Get(), 10);
+    renderDevice.dsvDescriptorHeap     = renderDevice.dsvDescriptorHeap    .Create(renderDevice.device.Get(), 10);
+    renderDevice.srvDescriptorHeap     = renderDevice.srvDescriptorHeap    .Create(renderDevice.device.Get(), 100, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
+    renderDevice.samplerDescriptorHeap = renderDevice.samplerDescriptorHeap.Create(renderDevice.device.Get(), 10 , D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
 
     // Create frame resources.
     {
@@ -316,8 +319,29 @@ void RenderDevice::ExecuteCommandList(ComRef<ID3D12GraphicsCommandList> const co
 }
 
 // Prepare to render the next frame.
+void RenderDevice::StartFrame()
+{
+    TransitionResource(commandList, renderTargets[frameIndex], D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+
+    auto const rtvHandle = rtvDescriptorHeap.GetCpuDescriptorHandle(frameIndex);
+    commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
+    commandList->RSSetViewports    (1, &viewport);
+    commandList->RSSetScissorRects (1, &scissorRect);
+
+    const float clearColor[] = { 0.0f, 0.2f, 0.4f, 1.0f };
+    commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
+}
+
+// Prepare to render the next frame.
 void RenderDevice::PresentFrame()
 {
+    TransitionResource(commandList, renderTargets[frameIndex], D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+
+    ThrowIfFailed(commandList->Close());
+
+    // Execute the command list.
+    ExecuteCommandList(commandList);
+
     // Present the frame.
     ThrowIfFailed(swapChain->Present(1, 0));
 
@@ -490,7 +514,6 @@ ComPtr<ID3D12Resource> AssetUploader::CreateStaticBuffer(
 
 
 
-
 AssetUploader::AssetUploader(RenderDevice const& renderDevice)
     : m_device     { renderDevice.device }
     , m_queue      { renderDevice.commandQueue }
@@ -509,4 +532,79 @@ void AssetUploader::HoldPendingObject(ComPtr<IUnknown> o)
 {
     m_pendingObjects.emplace_back(m_fence.SignalOnGpu(), std::move(o));
     // TODO: Maybe look to see if we can delete some objects now?
+}
+
+
+
+
+
+IntermediateRenderTarget CreateIntermediateRenderTarget(
+    RenderDevice&               renderDevice,
+    UINT                  const width,
+    UINT                  const height,
+    DXGI_FORMAT           const format,
+    D3D12_RESOURCE_STATES const initialState
+)
+{
+    IntermediateRenderTarget renderTarget
+    {
+        .Width  = width ,
+        .Height = height,
+    };
+        
+    D3D12_HEAP_PROPERTIES const heap{
+        .Type                 = D3D12_HEAP_TYPE_DEFAULT,
+        .CPUPageProperty      = D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+        .MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN,
+        .CreationNodeMask     = 1,
+        .VisibleNodeMask      = 1,
+    };
+    D3D12_RESOURCE_DESC const desc{
+        .Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+        .Alignment        = 0,
+        .Width            = width,
+        .Height           = height,
+        .DepthOrArraySize = 1,
+        .MipLevels        = 1,
+        .Format           = format,
+        .SampleDesc       { .Count = 1, .Quality = 0 },
+        .Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN,
+        .Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+    };
+    D3D12_CLEAR_VALUE const clear
+    {
+        .Format = format,
+    };
+    ThrowIfFailed(renderDevice.device->CreateCommittedResource(
+        &heap,
+        D3D12_HEAP_FLAG_NONE,
+        &desc,
+        initialState,
+        &clear,
+        IID_PPV_ARGS(&renderTarget.Resource)
+    ));
+
+    // Create frame resources.
+    {
+        renderTarget.RtvDescriptorIndex = renderDevice.rtvDescriptorHeap.AllocateDescriptors(1);
+        auto handle = renderDevice.rtvDescriptorHeap.GetCpuDescriptorHandle(renderTarget.RtvDescriptorIndex);
+
+        // Create a RTV and a command allocator for each frame.
+        renderDevice.device->CreateRenderTargetView(renderTarget.Resource.Get(), nullptr, handle);
+    }
+
+    {
+        renderTarget.SrvDescriptorIndex = renderDevice.srvDescriptorHeap.AllocateDescriptors(1);
+        auto handle = renderDevice.srvDescriptorHeap.GetCpuDescriptorHandle(renderTarget.SrvDescriptorIndex);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC const srvDesc{
+            .Format                  = format,
+            .ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D,
+            .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+            .Texture2D               { .MipLevels = 1 },
+        };
+        renderDevice.device->CreateShaderResourceView(renderTarget.Resource.Get(), &srvDesc, handle);
+    }
+
+    return renderTarget;
 }
