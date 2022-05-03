@@ -22,6 +22,11 @@ struct VertexPosition
     XMFLOAT3 position;
 };
 
+struct TriangleParameters
+{
+    uint32_t color;
+};
+
 
 
 struct VisibilityPass
@@ -68,8 +73,8 @@ VisibilityPass::VisibilityPass(RenderDevice& renderDevice)
         );
     }
 
-    VisibilityBuffer = CreateIntermediateRenderTarget(renderDevice, 1280, 720, DXGI_FORMAT_R32_UINT, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    DepthBuffer      = CreateIntermediateDepthBuffer (renderDevice, 1280, 720, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    VisibilityBuffer = CreateIntermediateRenderTarget(renderDevice, 1280, 720, DXGI_FORMAT_R32_UINT, {}, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    DepthBuffer      = CreateIntermediateDepthBuffer (renderDevice, 1280, 720, 0, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 }
 
 void VisibilityPass::StartPass(RenderDevice const& renderDevice) const
@@ -90,9 +95,8 @@ void VisibilityPass::StartPass(RenderDevice const& renderDevice) const
     renderDevice.commandList->RSSetViewports    (1, &viewport);
     renderDevice.commandList->RSSetScissorRects (1, &scissorRect);
 
-    static constexpr float clearColor[4]{};
-    renderDevice.commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
-    renderDevice.commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1e20f, 0, 0, nullptr);
+    renderDevice.commandList->ClearRenderTargetView(rtvHandle, VisibilityBuffer.ClearColor.data(), 0, nullptr);
+    renderDevice.commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, DepthBuffer.ClearValue, 0, 0, nullptr);
 }
 
 void VisibilityPass::EndPass(RenderDevice const& renderDevice) const
@@ -120,6 +124,7 @@ ColorPass::ColorPass(RenderDevice& renderDevice)
     // Create the rendering root signature.
     RootSignature = renderDevice.CreateRootSignature<
         Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SrvRange<0, 1>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SrvRange<1, 1>>,
         Root::Flags<D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT>
     >();
 
@@ -155,9 +160,12 @@ void ColorPass::EndPass(RenderDevice const& renderDevice) const
 
 struct Model
 {
-    uint32_t                 VertexCount               = 0;
-    ComPtr<ID3D12Resource>   PositionsBuffer           {};
-    D3D12_VERTEX_BUFFER_VIEW PositionsVertexBufferView {};
+    uint32_t                 VertexCount                      = 0;
+    ComPtr<ID3D12Resource>   PositionsBuffer                  {};
+    D3D12_VERTEX_BUFFER_VIEW PositionsVertexBufferView        {};
+    uint32_t                 TriangleCount                    = 0;
+    ComPtr<ID3D12Resource>   TriangleParametersBuffer         {};
+    UINT                     TriangleParametersBufferSrvIndex = 0;
 };
 
 
@@ -267,6 +275,41 @@ Model CreateCubeModel(AssetUploader& uploader, RenderDevice& renderDevice)
     model.PositionsVertexBufferView.BufferLocation = model.PositionsBuffer->GetGPUVirtualAddress();
     model.PositionsVertexBufferView.StrideInBytes  = sizeof(triangleVertices[0]);
     model.PositionsVertexBufferView.SizeInBytes    = sizeof(triangleVertices);
+
+    static constexpr TriangleParameters triangleParams[] =
+    {
+        { 0xFF0000FFu },
+        { 0xFF0000FFu },
+        { 0xFF00FF00u },
+        { 0xFF00FF00u },
+        { 0xFFFF0000u },
+        { 0xFFFF0000u },
+        { 0xFF00FFFFu },
+        { 0xFF00FFFFu },
+        { 0xFFFF00FFu },
+        { 0xFFFF00FFu },
+        { 0xFFFFFF00u },
+        { 0xFFFFFF00u },
+    };
+
+    model.TriangleCount = std::size(triangleParams);
+
+    model.TriangleParametersBuffer = uploader.CreateStaticBuffer(sizeof(triangleParams), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        [&](void* p)
+        {
+            memcpy(p, triangleParams, sizeof(triangleParams));
+        }
+    );
+
+    // Initialize the vertex buffer view.
+    model.TriangleParametersBufferSrvIndex = renderDevice.AllocateSrvDescriptor(model.TriangleParametersBuffer,
+        {
+            .Format                  = DXGI_FORMAT_UNKNOWN,
+            .ViewDimension           = D3D12_SRV_DIMENSION_BUFFER,
+            .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+            .Buffer                  { .NumElements = std::size(triangleParams), .StructureByteStride = sizeof(triangleParams[0]) },
+        }
+    );
 
     return model;
 }
@@ -432,7 +475,7 @@ Assets LoadAssets(RenderDevice& renderDevice)
     >();
 
     // Create rendering surfaces.
-    assets.objectTarget = CreateIntermediateRenderTarget(renderDevice, 1280, 720, DXGI_FORMAT_R32_UINT, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    assets.objectTarget = CreateIntermediateRenderTarget(renderDevice, 1280, 720, DXGI_FORMAT_R32_UINT, {}, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
     {
         assets.objectTargetSampleWrapDescriptorIndex = renderDevice.samplerDescriptorHeap.AllocateDescriptors(1);
@@ -631,6 +674,7 @@ void RenderFrame(RenderDevice& renderDevice, Assets const& assets)
     renderDevice.commandList->DrawInstanced(3 * 2 * 6, 1, 0, 0);
 
     assets.colorPass->StartPass(renderDevice, assets.visibilityPass->VisibilityBuffer);
+    renderDevice.commandList->SetGraphicsRootDescriptorTable(1, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(assets.cube->TriangleParametersBufferSrvIndex));
     renderDevice.commandList->DrawInstanced(3, 1, 0, 0);
     assets.colorPass->EndPass(renderDevice);
 
@@ -656,7 +700,7 @@ void AnimateAssets(Assets const& assets)
 
     float const fovAngleY = 90.0f;
     float const fovRadiansY = fovAngleY * XM_PI / 180.0f;
-    XMMATRIX proj = XMMatrixPerspectiveFovRH(fovRadiansY, 1280.0 / 720.0, 0.01f, 125.0f);
+    XMMATRIX proj = XMMatrixPerspectiveFovRH(fovRadiansY, 1280.0 / 720.0, 125.0f, 0.01f);
 
     ViewProj = view * proj;
 

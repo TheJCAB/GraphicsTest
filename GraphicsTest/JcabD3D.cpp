@@ -273,6 +273,14 @@ ComPtr<ID3D12GraphicsCommandList> RenderDevice::CreateDirectCommandList(ComRef<I
     return commandList;
 }
 
+UINT RenderDevice::AllocateSrvDescriptor(ComRef<ID3D12Resource> const resource, D3D12_SHADER_RESOURCE_VIEW_DESC const& desc)
+{
+    auto const index = srvDescriptorHeap.AllocateDescriptors(1);
+    auto handle = srvDescriptorHeap.GetCpuDescriptorHandle(index);
+    device->CreateShaderResourceView(resource, &desc, handle);
+    return index;
+}
+
 UINT64 GpuSignalingFence::SignalOnGpu()
 {
     auto const value = m_fenceValue;
@@ -444,6 +452,7 @@ ComPtr<ID3D12PipelineState> RenderDevice::Create(Pipeline::State const& state)
                                  state.RTVFormats[5],
                                  state.RTVFormats[6],
                                  state.RTVFormats[7] },
+        .DSVFormat             = state.DSVFormat,
         .SampleDesc            { .Count = state.Multisampling.Count, .Quality = state.Multisampling.Quality },
     };
     ThrowIfFailed(device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&result)));
@@ -543,13 +552,15 @@ IntermediateRenderTarget CreateIntermediateRenderTarget(
     UINT                  const width,
     UINT                  const height,
     DXGI_FORMAT           const format,
+    std::array<float, 4>  const clearColor,
     D3D12_RESOURCE_STATES const initialState
 )
 {
     IntermediateRenderTarget renderTarget
     {
-        .Width  = width ,
-        .Height = height,
+        .Width      = width ,
+        .Height     = height,
+        .ClearColor = clearColor,
     };
         
     D3D12_HEAP_PROPERTIES const heap{
@@ -574,6 +585,7 @@ IntermediateRenderTarget CreateIntermediateRenderTarget(
     D3D12_CLEAR_VALUE const clear
     {
         .Format = format,
+        .Color{ clearColor[0], clearColor[1], clearColor[2], clearColor[3] },
     };
     ThrowIfFailed(renderDevice.device->CreateCommittedResource(
         &heap,
@@ -593,18 +605,14 @@ IntermediateRenderTarget CreateIntermediateRenderTarget(
         renderDevice.device->CreateRenderTargetView(renderTarget.Resource.Get(), nullptr, handle);
     }
 
-    {
-        renderTarget.SrvDescriptorIndex = renderDevice.srvDescriptorHeap.AllocateDescriptors(1);
-        auto handle = renderDevice.srvDescriptorHeap.GetCpuDescriptorHandle(renderTarget.SrvDescriptorIndex);
-
-        D3D12_SHADER_RESOURCE_VIEW_DESC const srvDesc{
+    renderTarget.SrvDescriptorIndex = renderDevice.AllocateSrvDescriptor(renderTarget.Resource,
+        {
             .Format                  = format,
             .ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D,
             .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
             .Texture2D               { .MipLevels = 1 },
-        };
-        renderDevice.device->CreateShaderResourceView(renderTarget.Resource.Get(), &srvDesc, handle);
-    }
+        }
+    );
 
     return renderTarget;
 }
@@ -613,13 +621,15 @@ IntermediateDepthBuffer CreateIntermediateDepthBuffer(
     RenderDevice&               renderDevice,
     UINT                  const width,
     UINT                  const height,
+    float                 const clearValue,
     D3D12_RESOURCE_STATES const initialState
 )
 {
     IntermediateDepthBuffer depthBuffer
     {
-        .Width  = width ,
-        .Height = height,
+        .Width      = width ,
+        .Height     = height,
+        .ClearValue = clearValue,
     };
         
     D3D12_HEAP_PROPERTIES const heap{
@@ -644,6 +654,7 @@ IntermediateDepthBuffer CreateIntermediateDepthBuffer(
     D3D12_CLEAR_VALUE const clear
     {
         .Format = DXGI_FORMAT_D32_FLOAT,
+        .Color  = clearValue,
     };
     ThrowIfFailed(renderDevice.device->CreateCommittedResource(
         &heap,

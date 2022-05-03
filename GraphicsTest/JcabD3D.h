@@ -144,6 +144,8 @@ struct RenderDevice
 
     ComPtr<ID3D12GraphicsCommandList> CreateDirectCommandList(ComRef<ID3D12CommandAllocator>, ComRef<ID3D12PipelineState> = nullptr) const;
 
+    UINT AllocateSrvDescriptor(ComRef<ID3D12Resource>, D3D12_SHADER_RESOURCE_VIEW_DESC const&);
+
     void ExecuteCommandList(ComRef<ID3D12GraphicsCommandList>);
 
     void WaitForGpuIdle() { fence->WaitForGpuIdle(); }
@@ -252,7 +254,7 @@ constexpr D3D12_DEPTH_STENCIL_DESC DefaultDepthStencilDesc
 {
     .DepthEnable      = TRUE,
     .DepthWriteMask   = D3D12_DEPTH_WRITE_MASK_ALL,
-    .DepthFunc        = D3D12_COMPARISON_FUNC_LESS,
+    .DepthFunc        = D3D12_COMPARISON_FUNC_GREATER,
     .StencilEnable    = FALSE,
 };
 
@@ -551,6 +553,7 @@ struct IntermediateRenderTarget
 {
     UINT                   Width              = 0;
     UINT                   Height             = 0;
+    std::array<float, 4>   ClearColor         {};
     ComPtr<ID3D12Resource> Resource           {};
     UINT                   RtvDescriptorIndex = 0;
     UINT                   SrvDescriptorIndex = 0;
@@ -561,6 +564,7 @@ IntermediateRenderTarget CreateIntermediateRenderTarget(
     UINT                  width,
     UINT                  height,
     DXGI_FORMAT           ,
+    std::array<float, 4>  clearColor,
     D3D12_RESOURCE_STATES initialState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
 );
 
@@ -568,6 +572,7 @@ struct IntermediateDepthBuffer
 {
     UINT                   Width              = 0;
     UINT                   Height             = 0;
+    float                  ClearValue         = 0;
     ComPtr<ID3D12Resource> Resource           {};
     UINT                   DsvDescriptorIndex = 0;
     UINT                   SrvDescriptorIndex = 0;
@@ -577,5 +582,6 @@ IntermediateDepthBuffer CreateIntermediateDepthBuffer(
     RenderDevice&         ,
     UINT                  width,
     UINT                  height,
+    float                 clearValue,
     D3D12_RESOURCE_STATES initialState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
 );

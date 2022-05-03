@@ -27,6 +27,12 @@ uint VisibilityPS(uint tri : SV_PrimitiveID) : SV_TARGET
 
 Texture2D<uint> visibilityMap : register(t0);
 
+struct TriangleParams
+{
+    uint Color;
+};
+StructuredBuffer<TriangleParams> triangleParams : register(t1);
+
 float4 ColorVS(uint index : SV_VertexID) : SV_POSITION
 {
     float4 position;
@@ -50,12 +56,19 @@ float4 ColorPS(float4 position : SV_POSITION) : SV_TARGET
         clip(-1);
     }
 
+    uint color = triangleParams[tri].Color;
     return float4(
-        (tri & 1) ? 1 : 0,
-        (tri & 2) ? 1 : 0,
-        (tri & 4) ? 1 : 0,
-        1
-    );
+        ( color        & 0xFF) / 255.0f,
+        ((color >>  8) & 0xFF) / 255.0f,
+        ((color >> 16) & 0xFF) / 255.0f,
+        ((color >> 24) & 0xFF) / 255.0f);
+
+    //return float4(
+    //    (tri & 1) ? 1 : 0,
+    //    (tri & 2) ? 1 : 0,
+    //    (tri & 4) ? 1 : 0,
+    //    1
+    //);
 }
 
 
