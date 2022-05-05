@@ -213,10 +213,10 @@ RenderDevice RenderDevice::Create(HWND const hwnd)
     renderDevice.scissorRect = D3D12_RECT    { 0, 0, 1280, 720 };
 
     // Create descriptor heaps.
-    renderDevice.rtvDescriptorHeap     = renderDevice.rtvDescriptorHeap    .Create(renderDevice.device.Get(), 10);
-    renderDevice.dsvDescriptorHeap     = renderDevice.dsvDescriptorHeap    .Create(renderDevice.device.Get(), 10);
-    renderDevice.srvDescriptorHeap     = renderDevice.srvDescriptorHeap    .Create(renderDevice.device.Get(), 100, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
-    renderDevice.samplerDescriptorHeap = renderDevice.samplerDescriptorHeap.Create(renderDevice.device.Get(), 10 , D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
+    renderDevice.rtvDescriptorHeap     = renderDevice.rtvDescriptorHeap    .Create(renderDevice.device.Get(),    10);
+    renderDevice.dsvDescriptorHeap     = renderDevice.dsvDescriptorHeap    .Create(renderDevice.device.Get(),    10);
+    renderDevice.srvDescriptorHeap     = renderDevice.srvDescriptorHeap    .Create(renderDevice.device.Get(), 10000, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
+    renderDevice.samplerDescriptorHeap = renderDevice.samplerDescriptorHeap.Create(renderDevice.device.Get(),    10, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
 
     // Create frame resources.
     {
@@ -273,11 +273,16 @@ ComPtr<ID3D12GraphicsCommandList> RenderDevice::CreateDirectCommandList(ComRef<I
     return commandList;
 }
 
+void RenderDevice::UploadSrvDescriptor(UINT index, ComRef<ID3D12Resource> const resource, D3D12_SHADER_RESOURCE_VIEW_DESC const& desc)
+{
+    auto handle = srvDescriptorHeap.GetCpuDescriptorHandle(index);
+    device->CreateShaderResourceView(resource, &desc, handle);
+}
+
 UINT RenderDevice::AllocateSrvDescriptor(ComRef<ID3D12Resource> const resource, D3D12_SHADER_RESOURCE_VIEW_DESC const& desc)
 {
     auto const index = srvDescriptorHeap.AllocateDescriptors(1);
-    auto handle = srvDescriptorHeap.GetCpuDescriptorHandle(index);
-    device->CreateShaderResourceView(resource, &desc, handle);
+    UploadSrvDescriptor(index, resource, desc);
     return index;
 }
 
@@ -401,7 +406,13 @@ ComPtr<ID3DBlob> Compile(Shader const& shader)
     auto const compileFlags = shader.Flags;
 #endif
     ComPtr<ID3DBlob> errors;
-    ThrowIfFailed(D3DCompileFromFile(shader.pFilename, nullptr, nullptr, shader.pFunction, shader.pTarget, compileFlags, 0, &compiledShader, &errors));
+    auto const hr = D3DCompileFromFile(shader.pFilename, nullptr, nullptr, shader.pFunction, shader.pTarget, compileFlags, 0, &compiledShader, &errors);
+    if (errors)
+    {
+        std::string const errorString{ static_cast<char const*>(errors->GetBufferPointer()), errors->GetBufferSize() };
+        OutputDebugStringA(errorString.c_str());
+    }
+    ThrowIfFailed(hr);
     return compiledShader;
 }
 

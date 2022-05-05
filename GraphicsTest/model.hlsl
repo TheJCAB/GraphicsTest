@@ -9,31 +9,56 @@
 //
 //*********************************************************
 
-cbuffer SceneConstantBuffer : register(b0)
+// Shared with the shader.
+#define MAX_MODEL_DEFINITIONS    100
+#define MAX_INSTANCE_DEFINITIONS 100
+
+struct InstanceAttributes
 {
     float4x4 Projection;
-    uint     PrimitiveIndex;
+    uint     ModelIndex;
+    uint3    Padding;
 };
 
-float4 VisibilityVS(float4 position : POSITION) : SV_POSITION
+cbuffer RootConstants
 {
-    return mul(position, Projection);
+    uint instanceId;
+};
+
+StructuredBuffer<InstanceAttributes> instanceList : register(t0, space0);
+
+float4 VisibilityVS(float3 position : SV_Position) : SV_Position
+{
+    return mul(float4(position, 1), instanceList[instanceId].Projection);
 }
 
-uint VisibilityPS(uint tri : SV_PrimitiveID) : SV_TARGET
+uint VisibilityPS(VisibilityPsInput input, uint triangleId : SV_PrimitiveID) : SV_Target
 {
-    return tri | PrimitiveIndex;
+    return triangleId | ((instanceId + 1) << 20);
 }
 
-Texture2D<uint> visibilityMap : register(t0);
+
+
+
+struct VertexAttributes
+{
+    float3 Normal;
+    uint   Color;
+};
 
 struct TriangleParams
 {
     uint Color;
 };
-StructuredBuffer<TriangleParams> triangleParams : register(t1);
 
-float4 ColorVS(uint index : SV_VertexID) : SV_POSITION
+Texture2D<uint> visibilityMap : register(t1, space0);
+
+Buffer<uint3>                      indices         [MAX_MODEL_DEFINITIONS] : register(t1, space1);
+StructuredBuffer<TriangleParams>   triangleParams  [MAX_MODEL_DEFINITIONS] : register(t1, space2);
+StructuredBuffer<float3>           vertexPositions [MAX_MODEL_DEFINITIONS] : register(t1, space3);
+StructuredBuffer<VertexAttributes> vertexAttributes[MAX_MODEL_DEFINITIONS] : register(t1, space4);
+
+float4 ColorVS(uint index : SV_VertexID) : SV_Position
 {
     float4 position;
 
@@ -45,23 +70,34 @@ float4 ColorVS(uint index : SV_VertexID) : SV_POSITION
     return position;
 }
 
-float4 ColorPS(float4 position : SV_POSITION) : SV_TARGET
+float4 ColorPS(float4 position : SV_Position) : SV_Target
 {
     uint v = visibilityMap.Load(int3(floor(position.xy), 0));
     uint tri  = v & 0xFFFFF;
-    uint prim = v >> 20;
+    uint instanceId = v >> 20;
 
-    if (prim == 0)
+    if (instanceId == 0)
     {
         clip(-1);
     }
+    --instanceId;
 
-    uint color = triangleParams[tri].Color;
-    return float4(
-        ( color        & 0xFF) / 255.0f,
-        ((color >>  8) & 0xFF) / 255.0f,
-        ((color >> 16) & 0xFF) / 255.0f,
-        ((color >> 24) & 0xFF) / 255.0f);
+    uint modelId = instanceList[instanceId].ModelIndex;
+
+    uint3 i = indices[modelId].Load(tri);
+
+    float3 normal0 = vertexAttributes[modelId][i[0]].Normal;
+    //float3 normal1 = vertexPositions[modelId][i[1]].Normal;
+    //float3 normal2 = vertexPositions[modelId][i[2]].Normal;
+
+    return float4(abs(normal0), 1);
+
+    //uint color = triangleParams[tri].Color;
+    //return float4(
+    //    ( color        & 0xFF) / 255.0f,
+    //    ((color >>  8) & 0xFF) / 255.0f,
+    //    ((color >> 16) & 0xFF) / 255.0f,
+    //    ((color >> 24) & 0xFF) / 255.0f);
 
     //return float4(
     //    (tri & 1) ? 1 : 0,
@@ -69,35 +105,4 @@ float4 ColorPS(float4 position : SV_POSITION) : SV_TARGET
     //    (tri & 4) ? 1 : 0,
     //    1
     //);
-}
-
-
-
-
-struct PSInput
-{
-    float4 position : SV_POSITION;
-    float4 color    : COLOR;
-};
-
-PSInput VSCube(float4 position : POSITION, float4 color : COLOR)
-{
-    PSInput result;
-
-    result.position = mul(position, Projection);
-    result.color = color;
-
-    return result;
-}
-
-float4 PSCube(PSInput input, uint tri : SV_PrimitiveID) : SV_TARGET
-{
-    if (tri & 1)
-    {
-        return input.color;
-    }
-    else
-    {
-        return float4(1, 1, 1, 1);
-    }
 }

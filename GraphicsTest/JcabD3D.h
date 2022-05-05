@@ -144,6 +144,7 @@ struct RenderDevice
 
     ComPtr<ID3D12GraphicsCommandList> CreateDirectCommandList(ComRef<ID3D12CommandAllocator>, ComRef<ID3D12PipelineState> = nullptr) const;
 
+    void UploadSrvDescriptor(UINT index, ComRef<ID3D12Resource>, D3D12_SHADER_RESOURCE_VIEW_DESC const&);
     UINT AllocateSrvDescriptor(ComRef<ID3D12Resource>, D3D12_SHADER_RESOURCE_VIEW_DESC const&);
 
     void ExecuteCommandList(ComRef<ID3D12GraphicsCommandList>);
@@ -334,9 +335,9 @@ private:
 namespace Root
 {
 
-template < UINT base, UINT count = 1 > struct SrvRange
+template < UINT base, UINT count = 1, UINT space = 0 > struct SrvRange
 {
-    static constexpr D3D12_DESCRIPTOR_RANGE1 Range{ .RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV, .NumDescriptors = count, .BaseShaderRegister = base, .OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
+    static constexpr D3D12_DESCRIPTOR_RANGE1 Range{ .RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV, .NumDescriptors = count, .BaseShaderRegister = base, .RegisterSpace = space, .OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
 };
 
 template < UINT base, UINT count = 1 > struct SamplerRange
@@ -373,6 +374,16 @@ template < D3D12_ROOT_PARAMETER_TYPE type, D3D12_SHADER_VISIBILITY visibility, U
 
 template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space, D3D12_ROOT_DESCRIPTOR_FLAGS flags > using Cbv = Descriptor<D3D12_ROOT_PARAMETER_TYPE_CBV, visibility, reg, space, flags>;
 template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space, D3D12_ROOT_DESCRIPTOR_FLAGS flags > using Srv = Descriptor<D3D12_ROOT_PARAMETER_TYPE_SRV, visibility, reg, space, flags>;
+
+template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space, UINT count > struct Constants
+{
+    static constexpr D3D12_ROOT_PARAMETER1 Parameter
+    {
+        .ParameterType    = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
+        .Constants{ .ShaderRegister = reg, .RegisterSpace = space, .Num32BitValues = count },
+        .ShaderVisibility = visibility,
+    };
+};
 
 
 
@@ -429,6 +440,23 @@ private:
     using Next = SignatureDescription<args...>;
 public:
     static constexpr auto Parameters = Next::Parameters.Cons<Descriptor<type, visibility, reg, space, flags>>;
+    static constexpr D3D12_ROOT_SIGNATURE_DESC1 Desc{
+        .NumParameters     = Parameters.Size             ,
+        .pParameters       = Parameters.Data             ,
+        .NumStaticSamplers = Next::Desc.NumStaticSamplers,
+        .pStaticSamplers   = Next::Desc.pStaticSamplers  ,
+        .Flags             = Next::Desc.Flags            ,
+    };
+
+    operator D3D12_ROOT_SIGNATURE_DESC1 const&() const { return Desc; }
+};
+
+template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space, UINT count, typename... args > struct SignatureDescription<Constants<visibility, reg, space, count>, args...>
+{
+private:
+    using Next = SignatureDescription<args...>;
+public:
+    static constexpr auto Parameters = Next::Parameters.Cons<Constants<visibility, reg, space, count>>;
     static constexpr D3D12_ROOT_SIGNATURE_DESC1 Desc{
         .NumParameters     = Parameters.Size             ,
         .pParameters       = Parameters.Data             ,

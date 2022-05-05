@@ -6,15 +6,15 @@
 #include <shlobj.h>
 
 #include <array>
+#include <span>
 #include <filesystem>
 
-XMMATRIX ViewProj;
+// Shared with the shader.
+#define MAX_MODEL_DEFINITIONS     100
+#define MAX_INSTANCE_DEFINITIONS 1000
 
-struct InstanceConstantBuffer
-{
-    XMFLOAT4X4 Projection;
-    uint32_t   InstanceIndex;
-};
+
+XMMATRIX ViewProj;
 
 
 struct VertexPosition
@@ -22,10 +22,316 @@ struct VertexPosition
     XMFLOAT3 position;
 };
 
+struct VertexAttributes
+{
+    XMFLOAT3 normal;
+    uint32_t color;
+};
+
 struct TriangleParameters
 {
     uint32_t color;
 };
+
+
+struct Model
+{
+    enum class Id : uint32_t { Invalid = 0 };
+
+    uint32_t                 TriangleCount            = 0;
+    ComPtr<ID3D12Resource>   TriangleIndices          {};
+    D3D12_INDEX_BUFFER_VIEW  TriangleIndicesView      {};
+    ComPtr<ID3D12Resource>   TriangleParametersBuffer {};
+    uint32_t                 VertexCount              = 0;
+    ComPtr<ID3D12Resource>   VertexPositionsBuffer    {};
+    D3D12_VERTEX_BUFFER_VIEW VertexPositionsBufferView{};
+    ComPtr<ID3D12Resource>   VertexAttributesBuffer   {};
+};
+
+using TriangleIndices = std::array<uint32_t, 3>;
+
+struct ModelVerticesDefinition
+{
+    UINT                                   Count;
+    std::function<void(VertexPosition*  )> PositionsFiller;
+    std::function<void(VertexAttributes*)> AttributesFiller;
+
+    ModelVerticesDefinition() = default;
+    ModelVerticesDefinition(std::span<VertexPosition const> positions, std::span<VertexAttributes const> attributes)
+        : Count           { static_cast<UINT>(positions.size()) }
+        , PositionsFiller { [positions ](VertexPosition*   p){ memcpy(p, positions .data(), positions .size() * sizeof(positions [0])); } }
+        , AttributesFiller{ [attributes](VertexAttributes* p){ memcpy(p, attributes.data(), attributes.size() * sizeof(attributes[0])); } }
+    {
+        assert(Count = positions .size()); // No slicing of the Count.
+        assert(Count = attributes.size()); // And both spans must line up.
+    }
+};
+
+struct ModelTrianglesDefinition
+{
+    UINT                                     Count;
+    std::function<void(TriangleIndices*   )> IndicesFiller;
+    std::function<void(TriangleParameters*)> ParametersFiller;
+
+    ModelTrianglesDefinition() = default;
+    ModelTrianglesDefinition(std::span<TriangleIndices const> indices, std::span<TriangleParameters const> parameters)
+        : Count           { static_cast<UINT>(indices.size()) }
+        , IndicesFiller   { [indices   ](TriangleIndices*    p){ memcpy(p, indices   .data(), indices   .size() * sizeof(indices   [0])); } }
+        , ParametersFiller{ [parameters](TriangleParameters* p){ memcpy(p, parameters.data(), parameters.size() * sizeof(parameters[0])); } }
+    {
+        assert(Count = indices   .size()); // No slicing of the Count.
+        assert(Count = parameters.size()); // And both spans must line up.
+    }
+};
+
+Model CreateModel(AssetUploader& uploader, RenderDevice& renderDevice, ModelTrianglesDefinition const& triangles, ModelVerticesDefinition const& vertices)
+{
+    Model model{};
+
+    model.TriangleCount = triangles.Count;
+    model.VertexCount   = vertices .Count;
+
+    auto const indicesSize = sizeof(TriangleIndices) * triangles.Count;
+    model.TriangleIndices = uploader.CreateStaticBuffer(indicesSize, D3D12_RESOURCE_STATE_INDEX_BUFFER,
+        [&](void* p)
+        {
+            triangles.IndicesFiller(static_cast<TriangleIndices*>(p));
+        }
+    );
+
+    model.TriangleIndicesView.BufferLocation = model.TriangleIndices->GetGPUVirtualAddress();
+    model.TriangleIndicesView.Format         = DXGI_FORMAT_R32_UINT;
+    model.TriangleIndicesView.SizeInBytes    = indicesSize;
+
+    model.VertexPositionsBuffer = uploader.CreateStaticBuffer(vertices.Count * sizeof(VertexPosition), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
+        [&](void* p)
+        {
+            vertices.PositionsFiller(static_cast<VertexPosition*>(p));
+        }
+    );
+
+    model.VertexPositionsBufferView.BufferLocation = model.VertexPositionsBuffer->GetGPUVirtualAddress();
+    model.VertexPositionsBufferView.StrideInBytes  = sizeof(VertexPosition);
+    model.VertexPositionsBufferView.SizeInBytes    = sizeof(VertexPosition) * vertices.Count;
+
+    model.VertexAttributesBuffer = uploader.CreateStaticBuffer(sizeof(VertexAttributes) * vertices.Count, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        [&](void* p)
+        {
+            vertices.AttributesFiller(static_cast<VertexAttributes*>(p));
+        }
+    );
+
+    model.TriangleParametersBuffer = uploader.CreateStaticBuffer(sizeof(TriangleParameters) * triangles.Count, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        [&](void* p)
+        {
+            triangles.ParametersFiller(static_cast<TriangleParameters*>(p));
+        }
+    );
+
+    return model;
+}
+
+struct ModelManager
+{
+    UINT                                     ModelCount = 0;
+    std::array<Model, MAX_MODEL_DEFINITIONS> ModelList{};
+
+    UINT                                     FirstSrv = 0;
+
+    ModelManager(RenderDevice&);
+    Model::Id AllocateNewModel(RenderDevice&, Model&&);
+
+    UINT GetTriangleIndicesDescriptorTable   () const { return FirstSrv + MAX_MODEL_DEFINITIONS * 0; }
+    UINT GetTriangleParametersDescriptorTable() const { return FirstSrv + MAX_MODEL_DEFINITIONS * 1; }
+    UINT GetVertexPositionsDescriptorTable   () const { return FirstSrv + MAX_MODEL_DEFINITIONS * 2; }
+    UINT GetVertexAttributesDescriptorTable  () const { return FirstSrv + MAX_MODEL_DEFINITIONS * 3; }
+
+    uint32_t GetModelIndex(Model::Id const id) const
+    {
+        assert(id != Model::Id::Invalid);
+        auto const index = static_cast<uint32_t>(id) - 1;
+        assert(index < ModelList.size());
+        assert(index < ModelCount);
+        return index;
+    }
+
+    Model&       GetModel(Model::Id id)       { return ModelList[GetModelIndex(id)]; }
+    Model const& GetModel(Model::Id id) const { return ModelList[GetModelIndex(id)]; }
+
+};
+
+ModelManager::ModelManager(RenderDevice& renderDevice)
+{
+    FirstSrv = renderDevice.srvDescriptorHeap.AllocateDescriptors(MAX_MODEL_DEFINITIONS * 4);
+}
+
+Model::Id ModelManager::AllocateNewModel(RenderDevice& renderDevice, Model&& model)
+{
+    assert(ModelCount < ModelList.size());
+    auto const index = ModelCount;
+    auto const id = Model::Id{ index + 1 };
+    ++ModelCount;
+
+    // Initialize the SRVs.
+
+    renderDevice.UploadSrvDescriptor(
+        GetTriangleIndicesDescriptorTable() + index,
+        model.TriangleIndices,
+        {
+            .Format                  = DXGI_FORMAT_R32G32B32_UINT,
+            .ViewDimension           = D3D12_SRV_DIMENSION_BUFFER,
+            .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+            .Buffer                  { .NumElements = model.TriangleCount },
+        }
+    );
+    renderDevice.UploadSrvDescriptor(
+        GetTriangleParametersDescriptorTable() + index,
+        model.TriangleParametersBuffer,
+        {
+            .Format                  = DXGI_FORMAT_UNKNOWN,
+            .ViewDimension           = D3D12_SRV_DIMENSION_BUFFER,
+            .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+            .Buffer                  { .NumElements = model.TriangleCount, .StructureByteStride = sizeof(TriangleParameters) },
+        }
+    );
+    renderDevice.UploadSrvDescriptor(
+        GetVertexPositionsDescriptorTable() + index,
+        model.VertexPositionsBuffer,
+        {
+            .Format                  = DXGI_FORMAT_UNKNOWN,
+            .ViewDimension           = D3D12_SRV_DIMENSION_BUFFER,
+            .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+            .Buffer                  { .NumElements = model.VertexCount, .StructureByteStride = sizeof(VertexPosition) },
+        }
+    );
+    renderDevice.UploadSrvDescriptor(
+        GetVertexAttributesDescriptorTable() + index,
+        model.VertexAttributesBuffer,
+        {
+            .Format                  = DXGI_FORMAT_UNKNOWN,
+            .ViewDimension           = D3D12_SRV_DIMENSION_BUFFER,
+            .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+            .Buffer                  { .NumElements = model.VertexCount, .StructureByteStride = sizeof(VertexAttributes) },
+        }
+    );
+    ModelList[index] = std::move(model);
+    return id;
+}
+
+
+struct InstanceAttributes
+{
+    XMFLOAT4X4 Projection;
+    uint32_t   ModelIndex;
+    uint32_t   Padding[3];
+};
+
+struct Instance
+{
+    enum Id : uint32_t { Invalid = 0 };
+
+    Model::Id ModelId = Model::Id::Invalid;
+
+    uint16_t Yaw   = static_cast<uint16_t>(rand());
+    uint16_t Pitch = static_cast<uint16_t>(rand());
+    uint16_t Roll  = static_cast<uint16_t>(rand());
+};
+
+struct InstanceManager
+{
+    UINT                                           InstanceCount = 0;
+    std::array<Instance, MAX_INSTANCE_DEFINITIONS> InstanceList{};
+
+    struct AttributesBuffer
+    {
+        ComPtr<ID3D12Resource>                                    Buffer   {};
+        std::array<InstanceAttributes, MAX_INSTANCE_DEFINITIONS>* pAttributes; // Permanently mapped for CPU access.
+        UINT                                                      SrvIndex = 0;
+    };
+    std::array<AttributesBuffer, FrameCount> AttributesBufferList{};
+
+    InstanceManager(RenderDevice&);
+    Instance::Id AllocateNewInstance(RenderDevice&, ModelManager const&, Instance&&);
+
+    uint32_t GetInstanceIndex(Instance::Id const id) const
+    {
+        assert(id != Instance::Id::Invalid);
+        auto const index = static_cast<uint32_t>(id) - 1;
+        assert(index < MAX_INSTANCE_DEFINITIONS);
+        assert(index < InstanceCount);
+        return index;
+    }
+
+    Instance&       GetInstance(Instance::Id id)       { return InstanceList[GetInstanceIndex(id)]; }
+    Instance const& GetInstance(Instance::Id id) const { return InstanceList[GetInstanceIndex(id)]; }
+
+    AttributesBuffer&       GetCurrentFrameInstanceAttributes(RenderDevice const& renderDevice)       { return AttributesBufferList[renderDevice.frameIndex]; }
+    AttributesBuffer const& GetCurrentFrameInstanceAttributes(RenderDevice const& renderDevice) const { return AttributesBufferList[renderDevice.frameIndex]; }
+
+    InstanceAttributes& GetCurrentFrameInstanceAttributes(RenderDevice const& renderDevice, Instance::Id const id) { return (*AttributesBufferList[renderDevice.frameIndex].pAttributes)[GetInstanceIndex(id)]; }
+};
+
+InstanceManager::InstanceManager(RenderDevice& renderDevice)
+{
+    for (auto& buffer : AttributesBufferList)
+    {
+        buffer.Buffer = CreateUploadBuffer(renderDevice.device, sizeof(*buffer.pAttributes));
+        D3D12_RANGE const readRange{ .Begin = 0, .End = 0 }; // We do not intend to read from this resource on the CPU.
+        ThrowIfFailed(buffer.Buffer->Map(0, &readRange, reinterpret_cast<void**>(&buffer.pAttributes)));
+        buffer.SrvIndex = renderDevice.AllocateSrvDescriptor(buffer.Buffer,
+            {
+                .Format                  = DXGI_FORMAT_UNKNOWN,
+                .ViewDimension           = D3D12_SRV_DIMENSION_BUFFER,
+                .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+                .Buffer                  { .NumElements = MAX_INSTANCE_DEFINITIONS, .StructureByteStride = sizeof(InstanceAttributes) },
+            }
+        );
+    }
+}
+
+Instance::Id InstanceManager::AllocateNewInstance(RenderDevice& renderDevice, ModelManager const& modelManager, Instance&& instance)
+{
+    assert(InstanceCount < InstanceList.size());
+    auto const index = InstanceCount;
+    auto const id = Instance::Id{ index + 1 };
+    ++InstanceCount;
+
+    auto& attributes = GetCurrentFrameInstanceAttributes(renderDevice, id);
+
+    attributes.ModelIndex = modelManager.GetModelIndex(instance.ModelId);
+
+    InstanceList[index] = std::move(instance);
+    return id;
+}
+
+void UpdateModelInstance(RenderDevice const& renderDevice, InstanceManager& instanceManager, Instance::Id const instanceId)
+{
+    auto& instance = instanceManager.GetInstance(instanceId);
+
+    instance.Yaw   += 0x50;
+    instance.Pitch += 0x77;
+    instance.Roll  += 0x23;
+
+    XMMATRIX const modelMatrix = XMMatrixRotationRollPitchYaw(instance.Pitch * (2.0f * XM_PI / 65536.0f), instance.Yaw * (2.0f * XM_PI / 65536.0f), instance.Roll * (2.0f * XM_PI / 65536.0));
+
+    auto& attributes = instanceManager.GetCurrentFrameInstanceAttributes(renderDevice, instanceId);
+    XMStoreFloat4x4(&attributes.Projection, XMMatrixTranspose(modelMatrix * ViewProj));
+};
+
+void DrawModelInstance(RenderDevice const& renderDevice, ModelManager const& modelManager, InstanceManager const& instanceManager, Instance::Id const instanceId)
+{
+    auto& instance = instanceManager.GetInstance(instanceId);
+    auto& model    = modelManager   .GetModel   (instance.ModelId);
+    renderDevice.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    renderDevice.commandList->IASetIndexBuffer      (&model.TriangleIndicesView);
+    renderDevice.commandList->IASetVertexBuffers    (0, 1, &model.VertexPositionsBufferView);
+    renderDevice.commandList->SetGraphicsRoot32BitConstant(0, instanceManager.GetInstanceIndex(instanceId), 0);
+    renderDevice.commandList->DrawIndexedInstanced  (model.TriangleCount * 3, 1, 0, 0, 0);
+}
+
+
+
+
 
 
 
@@ -38,7 +344,7 @@ struct VisibilityPass
 
     VisibilityPass(RenderDevice& renderDevice);
 
-    void StartPass(RenderDevice const&) const;
+    void StartPass(RenderDevice const&, ModelManager const&, InstanceManager const&) const;
     void EndPass  (RenderDevice const&) const;
 };
 
@@ -46,7 +352,8 @@ VisibilityPass::VisibilityPass(RenderDevice& renderDevice)
 {
     // Create the rendering root signature.
     RootSignature = renderDevice.CreateRootSignature<
-        Root::Cbv<D3D12_SHADER_VISIBILITY_ALL, 0, 0, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC>,
+        Root::Constants<D3D12_SHADER_VISIBILITY_ALL, 0, 0, 1>, // Constant buffer
+        Root::Table<D3D12_SHADER_VISIBILITY_VERTEX, Root::SrvRange<0, 1, 0>>, // Instance buffer
         Root::Flags<D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT>
     >();
 
@@ -55,7 +362,7 @@ VisibilityPass::VisibilityPass(RenderDevice& renderDevice)
         // Define the vertex input layout.
         D3D12_INPUT_ELEMENT_DESC const inputElementDescs[] =
         {
-            { .SemanticName = "POSITION", .SemanticIndex = 0, .Format = DXGI_FORMAT_R32G32B32_FLOAT, .InputSlot = 0, .AlignedByteOffset =  0, .InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, .InstanceDataStepRate = 0 },
+            { .SemanticName = "SV_Position", .SemanticIndex = 0, .Format = DXGI_FORMAT_R32G32B32_FLOAT, .InputSlot = 0, .AlignedByteOffset =  0, .InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, .InstanceDataStepRate = 0 },
         };
 
         PipelineState = renderDevice.Create(Pipeline::State
@@ -63,8 +370,8 @@ VisibilityPass::VisibilityPass(RenderDevice& renderDevice)
                 .RootSignature         { RootSignature },
                 .TopologyType          = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
                 .InputLayout           { inputElementDescs, _countof(inputElementDescs) },
-                .VS                    = Compile(Shader{ L"model.hlsl", "VisibilityVS", "vs_5_0" }),
-                .PS                    = Compile(Shader{ L"model.hlsl", "VisibilityPS", "ps_5_0" }),
+                .VS                    = Compile(Shader{ L"model.hlsl", "VisibilityVS", "vs_5_1" }),
+                .PS                    = Compile(Shader{ L"model.hlsl", "VisibilityPS", "ps_5_1" }),
                 .DepthStencilState     = DefaultDepthStencilDesc,
                 .Multisampling         = Pipeline::NoMultisampling,
                 .RTVFormats            { DXGI_FORMAT_R32_UINT, },
@@ -77,10 +384,13 @@ VisibilityPass::VisibilityPass(RenderDevice& renderDevice)
     DepthBuffer      = CreateIntermediateDepthBuffer (renderDevice, 1280, 720, 0, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 }
 
-void VisibilityPass::StartPass(RenderDevice const& renderDevice) const
+void VisibilityPass::StartPass(RenderDevice const& renderDevice, ModelManager const&, InstanceManager const& instanceManager) const
 {
     renderDevice.commandList->SetGraphicsRootSignature(RootSignature.Get());
     renderDevice.commandList->SetPipelineState        (PipelineState.Get());
+
+    ID3D12DescriptorHeap* const heaps[]{ renderDevice.srvDescriptorHeap };
+    renderDevice.commandList->SetDescriptorHeaps(1, heaps);
 
     TransitionResource(renderDevice.commandList, VisibilityBuffer.Resource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
     TransitionResource(renderDevice.commandList, DepthBuffer     .Resource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_DEPTH_WRITE);
@@ -97,6 +407,7 @@ void VisibilityPass::StartPass(RenderDevice const& renderDevice) const
 
     renderDevice.commandList->ClearRenderTargetView(rtvHandle, VisibilityBuffer.ClearColor.data(), 0, nullptr);
     renderDevice.commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, DepthBuffer.ClearValue, 0, 0, nullptr);
+    renderDevice.commandList->SetGraphicsRootDescriptorTable(1, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(instanceManager.GetCurrentFrameInstanceAttributes(renderDevice).SrvIndex));
 }
 
 void VisibilityPass::EndPass(RenderDevice const& renderDevice) const
@@ -115,7 +426,7 @@ struct ColorPass
 
     ColorPass(RenderDevice& renderDevice);
 
-    void StartPass(RenderDevice const&, IntermediateRenderTarget const&) const;
+    void StartPass(RenderDevice const&, IntermediateRenderTarget const&, ModelManager const& modelManager, InstanceManager const& instanceManager) const;
     void EndPass  (RenderDevice const&) const;
 };
 
@@ -123,8 +434,12 @@ ColorPass::ColorPass(RenderDevice& renderDevice)
 {
     // Create the rendering root signature.
     RootSignature = renderDevice.CreateRootSignature<
-        Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SrvRange<0, 1>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SrvRange<1, 1>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SrvRange<0, 1                    , 0>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SrvRange<1, 1                    , 0>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS, 1>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS, 2>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS, 3>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS, 4>>,
         Root::Flags<D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT>
     >();
 
@@ -133,8 +448,8 @@ ColorPass::ColorPass(RenderDevice& renderDevice)
         {
             .RootSignature         { RootSignature },
             .TopologyType          = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-            .VS                    = Compile(Shader{ L"model.hlsl", "ColorVS", "vs_5_0" }),
-            .PS                    = Compile(Shader{ L"model.hlsl", "ColorPS", "ps_5_0" }),
+            .VS                    = Compile(Shader{ L"model.hlsl", "ColorVS", "vs_5_1" }),
+            .PS                    = Compile(Shader{ L"model.hlsl", "ColorPS", "ps_5_1" }),
             .DepthStencilState     = Pipeline::NoDepthStencil,
             .Multisampling         = Pipeline::NoMultisampling,
             .RTVFormats            { DXGI_FORMAT_R8G8B8A8_UNORM, },
@@ -142,14 +457,20 @@ ColorPass::ColorPass(RenderDevice& renderDevice)
     );
 }
 
-void ColorPass::StartPass(RenderDevice const& renderDevice, IntermediateRenderTarget const& visibilityBuffer) const
+void ColorPass::StartPass(RenderDevice const& renderDevice, IntermediateRenderTarget const& visibilityBuffer, ModelManager const& modelManager, InstanceManager const& instanceManager) const
 {
     renderDevice.commandList->SetGraphicsRootSignature(RootSignature.Get());
     renderDevice.commandList->SetPipelineState        (PipelineState.Get());
 
     ID3D12DescriptorHeap* const heaps[]{ renderDevice.srvDescriptorHeap };
     renderDevice.commandList->SetDescriptorHeaps(1, heaps);
-    renderDevice.commandList->SetGraphicsRootDescriptorTable(0, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(visibilityBuffer.SrvDescriptorIndex));
+    renderDevice.commandList->SetGraphicsRootDescriptorTable(0, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(instanceManager.GetCurrentFrameInstanceAttributes(renderDevice).SrvIndex));
+    renderDevice.commandList->SetGraphicsRootDescriptorTable(1, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(visibilityBuffer.SrvDescriptorIndex));
+
+    renderDevice.commandList->SetGraphicsRootDescriptorTable(2, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetTriangleIndicesDescriptorTable()));
+    renderDevice.commandList->SetGraphicsRootDescriptorTable(3, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetTriangleParametersDescriptorTable()));
+    renderDevice.commandList->SetGraphicsRootDescriptorTable(4, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetVertexPositionsDescriptorTable()));
+    renderDevice.commandList->SetGraphicsRootDescriptorTable(5, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetVertexAttributesDescriptorTable()));
 }
 
 void ColorPass::EndPass(RenderDevice const& renderDevice) const
@@ -158,123 +479,94 @@ void ColorPass::EndPass(RenderDevice const& renderDevice) const
 
 
 
-struct Model
-{
-    uint32_t                 VertexCount                      = 0;
-    ComPtr<ID3D12Resource>   PositionsBuffer                  {};
-    D3D12_VERTEX_BUFFER_VIEW PositionsVertexBufferView        {};
-    uint32_t                 TriangleCount                    = 0;
-    ComPtr<ID3D12Resource>   TriangleParametersBuffer         {};
-    UINT                     TriangleParametersBufferSrvIndex = 0;
-};
 
 
 
-
-struct Instance
-{
-    uint16_t yaw   = 0;
-    uint16_t pitch = 0;
-    uint16_t roll  = 0;
-
-    ConstantBuffer<InstanceConstantBuffer> Constants{};
-
-    Instance(RenderDevice& renderDevice);
-};
-
-void UpdateModelInstance(Instance& instance)
-{
-    instance.yaw   += 0x50;
-    instance.pitch += 0x77;
-    instance.roll  += 0x23;
-};
-
-void DrawModelInstance(RenderDevice const& renderDevice, Model const& model, Instance const& instance, uint32_t const instanceIndex)
-{
-    XMMATRIX const modelMatrix = XMMatrixRotationRollPitchYaw(instance.pitch * (2.0f * XM_PI / 65536.0f), instance.yaw * (2.0f * XM_PI / 65536.0f), instance.roll * (2.0f * XM_PI / 65536.0));
-
-    XMStoreFloat4x4(&instance.Constants->Projection, XMMatrixTranspose(modelMatrix * ViewProj));
-    instance.Constants->InstanceIndex = instanceIndex << 20;
-
-    renderDevice.commandList->IASetPrimitiveTopology           (D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    renderDevice.commandList->IASetVertexBuffers               (0, 1, &model.PositionsVertexBufferView);
-    renderDevice.commandList->SetGraphicsRootConstantBufferView(0, instance.Constants);
-    renderDevice.commandList->DrawInstanced                    (model.VertexCount, 1, 0, 0);
-}
-
-Instance::Instance(RenderDevice& renderDevice)
-{
-    Constants = Constants.Create(renderDevice.device.Get());
-
-    yaw   = rand();
-    pitch = rand();
-    roll  = rand();
-}
 
 
 Model CreateCubeModel(AssetUploader& uploader, RenderDevice& renderDevice)
 {
-    Model model{};
+    static constexpr TriangleIndices indices[] =
+    {
+        {  0,  1,  2 },
+        {  2,  1,  3 },
 
-    // Create the vertex buffer for the cube.
+        {  4,  5,  6 },
+        {  6,  5,  7 },
+
+        {  8,  9, 10 },
+        { 10,  9, 11 },
+
+        { 12, 13, 14 },
+        { 14, 13, 15 },
+
+        { 16, 17, 18 },
+        { 18, 17, 19 },
+
+        { 20, 21, 22 },
+        { 22, 21, 23 },
+    };
+
     static constexpr VertexPosition triangleVertices[] =
     {
         { {  1.0f,  1.0f,  1.0f } },
         { {  1.0f,  1.0f, -1.0f } },
         { {  1.0f, -1.0f,  1.0f } },
-        { {  1.0f, -1.0f,  1.0f } },
-        { {  1.0f,  1.0f, -1.0f } },
         { {  1.0f, -1.0f, -1.0f } },
 
         { { -1.0f,  1.0f,  1.0f } },
         { { -1.0f, -1.0f,  1.0f } },
         { { -1.0f,  1.0f, -1.0f } },
-        { { -1.0f,  1.0f, -1.0f } },
-        { { -1.0f, -1.0f,  1.0f } },
         { { -1.0f, -1.0f, -1.0f } },
 
         { {  1.0f,  1.0f,  1.0f } },
         { {  1.0f, -1.0f,  1.0f } },
         { { -1.0f,  1.0f,  1.0f } },
-        { { -1.0f,  1.0f,  1.0f } },
-        { {  1.0f, -1.0f,  1.0f } },
         { { -1.0f, -1.0f,  1.0f } },
 
         { {  1.0f,  1.0f, -1.0f } },
         { { -1.0f,  1.0f, -1.0f } },
         { {  1.0f, -1.0f, -1.0f } },
-        { {  1.0f, -1.0f, -1.0f } },
-        { { -1.0f,  1.0f, -1.0f } },
         { { -1.0f, -1.0f, -1.0f } },
 
         { {  1.0f,  1.0f,  1.0f } },
         { { -1.0f,  1.0f,  1.0f } },
         { {  1.0f,  1.0f, -1.0f } },
-        { {  1.0f,  1.0f, -1.0f } },
-        { { -1.0f,  1.0f,  1.0f } },
         { { -1.0f,  1.0f, -1.0f } },
 
         { {  1.0f, -1.0f,  1.0f } },
         { {  1.0f, -1.0f, -1.0f } },
         { { -1.0f, -1.0f,  1.0f } },
-        { { -1.0f, -1.0f,  1.0f } },
-        { {  1.0f, -1.0f, -1.0f } },
         { { -1.0f, -1.0f, -1.0f } },
     };
 
-    model.VertexCount = std::size(triangleVertices);
-
-    model.PositionsBuffer = uploader.CreateStaticBuffer(sizeof(triangleVertices), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
-        [&](void* p)
-        {
-            memcpy(p, triangleVertices, sizeof(triangleVertices));
-        }
-    );
-
-    // Initialize the vertex buffer view.
-    model.PositionsVertexBufferView.BufferLocation = model.PositionsBuffer->GetGPUVirtualAddress();
-    model.PositionsVertexBufferView.StrideInBytes  = sizeof(triangleVertices[0]);
-    model.PositionsVertexBufferView.SizeInBytes    = sizeof(triangleVertices);
+    static constexpr VertexAttributes vertexAttributes[] =
+    {
+        { {  1,  0,  0 }, 0xFF0000FFu },
+        { {  1,  0,  0 }, 0xFF0000FFu },
+        { {  1,  0,  0 }, 0xFF0000FFu },
+        { {  1,  0,  0 }, 0xFF0000FFu },
+        { { -1,  0,  0 }, 0xFF00FF00u },
+        { { -1,  0,  0 }, 0xFF00FF00u },
+        { { -1,  0,  0 }, 0xFF00FF00u },
+        { { -1,  0,  0 }, 0xFF00FF00u },
+        { {  0,  0,  1 }, 0xFFFF0000u },
+        { {  0,  0,  1 }, 0xFFFF0000u },
+        { {  0,  0,  1 }, 0xFFFF0000u },
+        { {  0,  0,  1 }, 0xFFFF0000u },
+        { {  0,  0, -1 }, 0xFF00FFFFu },
+        { {  0,  0, -1 }, 0xFF00FFFFu },
+        { {  0,  0, -1 }, 0xFF00FFFFu },
+        { {  0,  0, -1 }, 0xFF00FFFFu },
+        { {  0,  1,  0 }, 0xFFFF00FFu },
+        { {  0,  1,  0 }, 0xFFFF00FFu },
+        { {  0,  1,  0 }, 0xFFFF00FFu },
+        { {  0,  1,  0 }, 0xFFFF00FFu },
+        { {  0, -1,  0 }, 0xFFFFFF00u },
+        { {  0, -1,  0 }, 0xFFFFFF00u },
+        { {  0, -1,  0 }, 0xFFFFFF00u },
+        { {  0, -1,  0 }, 0xFFFFFF00u },
+    };
 
     static constexpr TriangleParameters triangleParams[] =
     {
@@ -292,146 +584,10 @@ Model CreateCubeModel(AssetUploader& uploader, RenderDevice& renderDevice)
         { 0xFFFFFF00u },
     };
 
-    model.TriangleCount = std::size(triangleParams);
-
-    model.TriangleParametersBuffer = uploader.CreateStaticBuffer(sizeof(triangleParams), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-        [&](void* p)
-        {
-            memcpy(p, triangleParams, sizeof(triangleParams));
-        }
-    );
-
-    // Initialize the vertex buffer view.
-    model.TriangleParametersBufferSrvIndex = renderDevice.AllocateSrvDescriptor(model.TriangleParametersBuffer,
-        {
-            .Format                  = DXGI_FORMAT_UNKNOWN,
-            .ViewDimension           = D3D12_SRV_DIMENSION_BUFFER,
-            .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
-            .Buffer                  { .NumElements = std::size(triangleParams), .StructureByteStride = sizeof(triangleParams[0]) },
-        }
-    );
-
-    return model;
+    return CreateModel(uploader, renderDevice, { indices, triangleParams }, { triangleVertices, vertexAttributes });
 }
 
 
-
-
-// Load the sample assets.
-struct CubeVertex
-{
-    XMFLOAT3 position;
-    uint32_t color;
-
-};
-
-struct Cube
-{
-    ComPtr<ID3D12RootSignature>            RootSignature   ;
-    ComPtr<ID3D12PipelineState>            PipelineState   ;
-    ConstantBuffer<InstanceConstantBuffer> ConstantBuffer  ;
-    ComPtr<ID3D12Resource>                 VertexBuffer    ;
-    D3D12_VERTEX_BUFFER_VIEW               VertexBufferView;
-};
-
-Cube LoadCube(AssetUploader& uploader, RenderDevice& renderDevice)
-{
-    Cube model{};
-
-    // Create the rendering root signature.
-    model.RootSignature = renderDevice.CreateRootSignature<
-        Root::Cbv<D3D12_SHADER_VISIBILITY_VERTEX, 0, 0, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC>,
-        Root::Flags<D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT>
-    >();
-
-    // Create the pipeline state, which includes compiling and loading shaders.
-    {
-        // Define the vertex input layout.
-        D3D12_INPUT_ELEMENT_DESC const inputElementDescs[] =
-        {
-            { .SemanticName = "POSITION", .SemanticIndex = 0, .Format = DXGI_FORMAT_R32G32B32_FLOAT, .InputSlot = 0, .AlignedByteOffset =  0, .InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, .InstanceDataStepRate = 0 },
-            { .SemanticName = "COLOR"   , .SemanticIndex = 0, .Format = DXGI_FORMAT_R8G8B8A8_UNORM , .InputSlot = 0, .AlignedByteOffset = 12, .InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, .InstanceDataStepRate = 0 },
-        };
-
-        model.PipelineState = renderDevice.Create(Pipeline::State
-            {
-                .RootSignature         { model.RootSignature },
-                .TopologyType          = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-                .InputLayout           { inputElementDescs, _countof(inputElementDescs) },
-                .VS                    = Compile(Shader{ L"model.hlsl", "VSCube", "vs_5_0" }),
-                .PS                    = Compile(Shader{ L"model.hlsl", "PSCube", "ps_5_0" }),
-                .DepthStencilState     = Pipeline::NoDepthStencil,
-                .Multisampling         = Pipeline::NoMultisampling,
-                .RTVFormats            { DXGI_FORMAT_R8G8B8A8_UNORM, },
-            }
-        );
-    }
-
-    model.ConstantBuffer = model.ConstantBuffer.Create(renderDevice.device.Get());
-
-    // Create the vertex buffer.
-    {
-        // Define the geometry for a triangle.
-        static constexpr CubeVertex triangleVertices[] =
-        {
-            { {  1.0f,  1.0f,  1.0f }, 0xFF'FF'00'00 },
-            { {  1.0f,  1.0f, -1.0f }, 0xFF'FF'00'00 },
-            { {  1.0f, -1.0f,  1.0f }, 0xFF'FF'00'00 },
-            { {  1.0f, -1.0f,  1.0f }, 0xFF'FF'00'00 },
-            { {  1.0f,  1.0f, -1.0f }, 0xFF'FF'00'00 },
-            { {  1.0f, -1.0f, -1.0f }, 0xFF'FF'00'00 },
-
-            { { -1.0f,  1.0f,  1.0f }, 0xFF'00'FF'00 },
-            { { -1.0f, -1.0f,  1.0f }, 0xFF'00'FF'00 },
-            { { -1.0f,  1.0f, -1.0f }, 0xFF'00'FF'00 },
-            { { -1.0f,  1.0f, -1.0f }, 0xFF'00'FF'00 },
-            { { -1.0f, -1.0f,  1.0f }, 0xFF'00'FF'00 },
-            { { -1.0f, -1.0f, -1.0f }, 0xFF'00'FF'00 },
-
-            { {  1.0f,  1.0f,  1.0f }, 0xFF'00'00'FF },
-            { {  1.0f, -1.0f,  1.0f }, 0xFF'00'00'FF },
-            { { -1.0f,  1.0f,  1.0f }, 0xFF'00'00'FF },
-            { { -1.0f,  1.0f,  1.0f }, 0xFF'00'00'FF },
-            { {  1.0f, -1.0f,  1.0f }, 0xFF'00'00'FF },
-            { { -1.0f, -1.0f,  1.0f }, 0xFF'00'00'FF },
-
-            { {  1.0f,  1.0f, -1.0f }, 0xFF'FF'FF'00 },
-            { { -1.0f,  1.0f, -1.0f }, 0xFF'FF'FF'00 },
-            { {  1.0f, -1.0f, -1.0f }, 0xFF'FF'FF'00 },
-            { {  1.0f, -1.0f, -1.0f }, 0xFF'FF'FF'00 },
-            { { -1.0f,  1.0f, -1.0f }, 0xFF'FF'FF'00 },
-            { { -1.0f, -1.0f, -1.0f }, 0xFF'FF'FF'00 },
-
-            { {  1.0f,  1.0f,  1.0f }, 0xFF'FF'00'FF },
-            { { -1.0f,  1.0f,  1.0f }, 0xFF'FF'00'FF },
-            { {  1.0f,  1.0f, -1.0f }, 0xFF'FF'00'FF },
-            { {  1.0f,  1.0f, -1.0f }, 0xFF'FF'00'FF },
-            { { -1.0f,  1.0f,  1.0f }, 0xFF'FF'00'FF },
-            { { -1.0f,  1.0f, -1.0f }, 0xFF'FF'00'FF },
-
-            { {  1.0f, -1.0f,  1.0f }, 0xFF'00'FF'FF },
-            { {  1.0f, -1.0f, -1.0f }, 0xFF'00'FF'FF },
-            { { -1.0f, -1.0f,  1.0f }, 0xFF'00'FF'FF },
-            { { -1.0f, -1.0f,  1.0f }, 0xFF'00'FF'FF },
-            { {  1.0f, -1.0f, -1.0f }, 0xFF'00'FF'FF },
-            { { -1.0f, -1.0f, -1.0f }, 0xFF'00'FF'FF },
-        };
-
-        model.VertexBuffer = uploader.CreateStaticBuffer(sizeof(triangleVertices), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
-            [&](void* p)
-            {
-                memcpy(p, triangleVertices, sizeof(triangleVertices));
-            }
-        );
-
-        // Initialize the vertex buffer view.
-        model.VertexBufferView.BufferLocation = model.VertexBuffer->GetGPUVirtualAddress();
-        model.VertexBufferView.StrideInBytes  = sizeof(triangleVertices[0]);
-        model.VertexBufferView.SizeInBytes    = sizeof(triangleVertices);
-    }
-
-    return model;
-}
 
 
 struct Assets
@@ -443,17 +599,17 @@ struct Assets
 
     UINT                              objectTargetSampleWrapDescriptorIndex;
 
-    Cube                              model;
-
     ComPtr<ID3D12RootSignature>       renderSignature;
     ComPtr<ID3D12PipelineState>       pipelineState;
     ComPtr<ID3D12Resource>            vertexBuffer;
     D3D12_VERTEX_BUFFER_VIEW          vertexBufferView;
 
-    std::shared_ptr<VisibilityPass> visibilityPass;
-    std::shared_ptr<ColorPass>      colorPass;
-    std::shared_ptr<Instance>       cubeInstances[2];
-    std::shared_ptr<Model>          cube;
+    std::shared_ptr<VisibilityPass>  visibilityPass;
+    std::shared_ptr<ColorPass>       colorPass;
+    std::shared_ptr<ModelManager   > modelManager;
+    std::shared_ptr<InstanceManager> instanceManager;
+    Model::Id                        cube;
+    Instance::Id                     cubeInstances[2];
 };
 
 Assets LoadAssets(RenderDevice& renderDevice)
@@ -511,8 +667,8 @@ Assets LoadAssets(RenderDevice& renderDevice)
                 .RootSignature         { assets.renderSignature },
                 .TopologyType          = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
                 .InputLayout           { inputElementDescs, _countof(inputElementDescs) },
-                .VS                    = Compile(Shader{ L"shaders.hlsl", "VSMain", "vs_5_0" }),
-                .PS                    = Compile(Shader{ L"shaders.hlsl", "PSMain", "ps_5_0" }),
+                .VS                    = Compile(Shader{ L"shaders.hlsl", "VSMain", "vs_5_1" }),
+                .PS                    = Compile(Shader{ L"shaders.hlsl", "PSMain", "ps_5_1" }),
                 .DepthStencilState     = Pipeline::NoDepthStencil,
                 .Multisampling         = Pipeline::NoMultisampling,
                 .RTVFormats            { DXGI_FORMAT_R8G8B8A8_UNORM, },
@@ -525,8 +681,8 @@ Assets LoadAssets(RenderDevice& renderDevice)
         {
             .RootSignature         { assets.rootSignature },
             .TopologyType          = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-            .VS                    = Compile(Shader{ L"shaders.hlsl", "VSFullScreen", "vs_5_0" }),
-            .PS                    = Compile(Shader{ L"shaders.hlsl", "PSFullScreen", "ps_5_0" }),
+            .VS                    = Compile(Shader{ L"shaders.hlsl", "VSFullScreen", "vs_5_1" }),
+            .PS                    = Compile(Shader{ L"shaders.hlsl", "PSFullScreen", "ps_5_1" }),
             .DepthStencilState     = Pipeline::NoDepthStencil,
             .Multisampling         = Pipeline::NoMultisampling,
             .RTVFormats            { DXGI_FORMAT_R32_UINT, },
@@ -597,13 +753,13 @@ Assets LoadAssets(RenderDevice& renderDevice)
         assets.vertexBufferView.SizeInBytes    = vertexBufferSize;
     }
 
-    assets.model = LoadCube(uploader, renderDevice);
-
-    assets.visibilityPass   = std::make_shared<VisibilityPass>(renderDevice);
-    assets.colorPass        = std::make_shared<ColorPass>     (renderDevice);
-    assets.cubeInstances[0] = std::make_shared<Instance>      (renderDevice);
-    assets.cubeInstances[1] = std::make_shared<Instance>      (renderDevice);
-    assets.cube             = std::make_shared<Model>         (CreateCubeModel(uploader, renderDevice));
+    assets.visibilityPass   = std::make_shared<VisibilityPass> (renderDevice);
+    assets.colorPass        = std::make_shared<ColorPass>      (renderDevice);
+    assets.modelManager     = std::make_shared<ModelManager>   (renderDevice);
+    assets.instanceManager  = std::make_shared<InstanceManager>(renderDevice);
+    assets.cube             = assets.modelManager->AllocateNewModel(renderDevice, CreateCubeModel(uploader, renderDevice));
+    assets.cubeInstances[0] = assets.instanceManager->AllocateNewInstance(renderDevice, *assets.modelManager, Instance{assets.cube});
+    assets.cubeInstances[1] = assets.instanceManager->AllocateNewInstance(renderDevice, *assets.modelManager, Instance{assets.cube});
 
     return assets;
 }
@@ -641,9 +797,9 @@ void RenderFrame(RenderDevice& renderDevice, Assets const& assets)
         TransitionResource(renderDevice.commandList, assets.objectTarget.Resource, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
 
-    assets.visibilityPass->StartPass(renderDevice);
-    DrawModelInstance(renderDevice, *assets.cube, *assets.cubeInstances[0], 1);
-    DrawModelInstance(renderDevice, *assets.cube, *assets.cubeInstances[1], 2);
+    assets.visibilityPass->StartPass(renderDevice, *assets.modelManager, *assets.instanceManager);
+    DrawModelInstance(renderDevice, *assets.modelManager, *assets.instanceManager, assets.cubeInstances[0]);
+    DrawModelInstance(renderDevice, *assets.modelManager, *assets.instanceManager, assets.cubeInstances[1]);
     assets.visibilityPass->EndPass(renderDevice);
 
 
@@ -665,16 +821,7 @@ void RenderFrame(RenderDevice& renderDevice, Assets const& assets)
 
 
 
-
-    renderDevice.commandList->SetGraphicsRootSignature(assets.model.RootSignature.Get());
-    renderDevice.commandList->SetPipelineState(assets.model.PipelineState.Get());
-    renderDevice.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    renderDevice.commandList->IASetVertexBuffers(0, 1, &assets.model.VertexBufferView);
-    renderDevice.commandList->SetGraphicsRootConstantBufferView(0, assets.model.ConstantBuffer);
-    renderDevice.commandList->DrawInstanced(3 * 2 * 6, 1, 0, 0);
-
-    assets.colorPass->StartPass(renderDevice, assets.visibilityPass->VisibilityBuffer);
-    renderDevice.commandList->SetGraphicsRootDescriptorTable(1, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(assets.cube->TriangleParametersBufferSrvIndex));
+    assets.colorPass->StartPass(renderDevice, assets.visibilityPass->VisibilityBuffer, *assets.modelManager, *assets.instanceManager);
     renderDevice.commandList->DrawInstanced(3, 1, 0, 0);
     assets.colorPass->EndPass(renderDevice);
 
@@ -682,16 +829,8 @@ void RenderFrame(RenderDevice& renderDevice, Assets const& assets)
 }
 
 // Prepare to render the next frame.
-void AnimateAssets(Assets const& assets)
+void AnimateAssets(RenderDevice const& renderDevice, Assets const& assets)
 {
-    static uint32_t roll = 0;
-    static uint32_t yaw  = 0;
-
-    XMMATRIX model = XMMatrixRotationRollPitchYaw(0, (yaw & 0xFF) * 2 * XM_PI / 256.0f, (roll & 0xFFF) * 2 * XM_PI / 4096.0);
-
-    ++roll;
-    ++yaw;
-
     XMFLOAT3 const eye{ 0, 0, -3 };
     XMFLOAT3 const at { 0, 0,  0 };
     XMFLOAT3 const up { 0, 1,  0 };
@@ -700,14 +839,12 @@ void AnimateAssets(Assets const& assets)
 
     float const fovAngleY = 90.0f;
     float const fovRadiansY = fovAngleY * XM_PI / 180.0f;
-    XMMATRIX proj = XMMatrixPerspectiveFovRH(fovRadiansY, 1280.0 / 720.0, 125.0f, 0.01f);
+    XMMATRIX proj = XMMatrixPerspectiveFovRH(fovRadiansY, 1280.0 / 720.0, D3D12_FLOAT32_MAX, 0.0001f);
 
     ViewProj = view * proj;
 
-    XMStoreFloat4x4(&assets.model.ConstantBuffer->Projection, XMMatrixTranspose(model * ViewProj));
-
-    UpdateModelInstance(*assets.cubeInstances[0]);
-    UpdateModelInstance(*assets.cubeInstances[1]);
+    UpdateModelInstance(renderDevice, *assets.instanceManager, assets.cubeInstances[0]);
+    UpdateModelInstance(renderDevice, *assets.instanceManager, assets.cubeInstances[1]);
 }
 
 RenderDevice* pRenderDevice;
@@ -738,7 +875,7 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPara
         // Record all the commands we need to render the scene into the command list.
         RenderFrame(*pRenderDevice, *pAssets);
 
-        AnimateAssets(*pAssets);
+        AnimateAssets(*pRenderDevice, *pAssets);
 
         return 0;
 
