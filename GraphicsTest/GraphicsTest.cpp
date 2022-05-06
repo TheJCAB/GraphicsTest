@@ -7,6 +7,8 @@
 
 #include <array>
 #include <span>
+#include <vector>
+#include <map>
 #include <filesystem>
 
 // Shared with the shader.
@@ -237,9 +239,9 @@ struct Instance
 
     Model::Id ModelId = Model::Id::Invalid;
 
-    uint16_t Yaw   = static_cast<uint16_t>(rand());
-    uint16_t Pitch = static_cast<uint16_t>(rand());
-    uint16_t Roll  = static_cast<uint16_t>(rand());
+    uint16_t Yaw   = 0;
+    uint16_t Pitch = 0;
+    uint16_t Roll  = 0;
 };
 
 struct InstanceManager
@@ -316,9 +318,10 @@ Instance::Id InstanceManager::AllocateNewInstance(RenderDevice& renderDevice, Mo
     auto const id = Instance::Id{ index + 1 };
     ++InstanceCount;
 
-    auto& attributes = GetCurrentFrameInstanceAttributes(renderDevice, id);
-
-    attributes.ModelIndex = modelManager.GetModelIndex(instance.ModelId);
+    for (auto& buffer : AttributesBufferList)
+    {
+        (*buffer.pAttributes)[GetInstanceIndex(id)].ModelIndex = modelManager.GetModelIndex(instance.ModelId);
+    }
 
     InstanceList[index] = std::move(instance);
     return id;
@@ -331,6 +334,19 @@ void UpdateModelInstance(RenderDevice const& renderDevice, InstanceManager& inst
     instance.Yaw   += 0x50;
     instance.Pitch += 0x77;
     instance.Roll  += 0x23;
+
+    XMMATRIX const modelMatrix = XMMatrixRotationRollPitchYaw(instance.Pitch * (2.0f * XM_PI / 65536.0f), instance.Yaw * (2.0f * XM_PI / 65536.0f), instance.Roll * (2.0f * XM_PI / 65536.0));
+
+    auto& attributes = instanceManager.GetCurrentFrameInstanceAttributes(renderDevice, instanceId);
+    XMStoreFloat4x4(&attributes.View      , XMMatrixTranspose(modelMatrix * View    ));
+    XMStoreFloat4x4(&attributes.Projection, XMMatrixTranspose(modelMatrix * ViewProj));
+};
+
+void UpdateStaticModelInstance(RenderDevice const& renderDevice, InstanceManager& instanceManager, Instance::Id const instanceId)
+{
+    auto& instance = instanceManager.GetInstance(instanceId);
+
+    instance.Yaw += 5;
 
     XMMATRIX const modelMatrix = XMMatrixRotationRollPitchYaw(instance.Pitch * (2.0f * XM_PI / 65536.0f), instance.Yaw * (2.0f * XM_PI / 65536.0f), instance.Roll * (2.0f * XM_PI / 65536.0));
 
@@ -649,6 +665,112 @@ Model CreateCubeModel(AssetUploader& uploader, RenderDevice& renderDevice)
 }
 
 
+std::vector<Model> LoadObjModel(AssetUploader& uploader, RenderDevice& renderDevice)
+{
+    std::vector<Model> result;
+
+    std::vector<XMFLOAT3> positions;
+    std::vector<XMFLOAT3> normals;
+
+    std::map<std::tuple<uint32_t, uint32_t>, uint32_t> vertices;
+
+    std::vector<VertexPosition>   vertexPositions;
+    std::vector<VertexAttributes> vertexAttributes;
+
+    std::vector<TriangleIndices> indices;
+    std::vector<TriangleParameters> triangleParams;
+
+    uint32_t vcount = 0;
+
+    auto const f = fopen(R"(C:\Users\jcab\Downloads\ameise\source\Ameise_C\Ameise_C.obj)", "r");
+    while (!feof(f))
+    {
+        std::array<char, 2048> buffer;
+        buffer[0] = '\0';
+        fgets(buffer.data(), buffer.size(), f);
+        std::string_view line{ buffer.data() };
+        if (line.empty())
+        {
+            continue;
+        }
+        if (line.back() == '\n')
+        {
+            line = line.substr(0, line.size() - 1);
+        }
+        if (line[0] == 'v' && line[1] == ' ')
+        {
+            XMFLOAT3 pos;
+            sscanf_s(line.data(), "v %f %f %f", &pos.x, &pos.y, &pos.z);
+            positions.push_back(pos);
+        }
+        else if (line[0] == 'v' && line[1] == 'n' && line[2] == ' ')
+        {
+            XMFLOAT3 norm;
+            sscanf_s(line.data(), "vn %f %f %f", &norm.x, &norm.y, &norm.z);
+            normals.push_back(norm);
+        }
+        else if (line[0] == 'f' && line[1] == ' ')
+        {
+            auto&& addTriangle =
+                [&](uint32_t p0, uint32_t p1, uint32_t p2, uint32_t n0, uint32_t n1, uint32_t n2)
+                {
+                    auto& v0 = vertices[std::tuple{p0, n0}];
+                    auto& v1 = vertices[std::tuple{p1, n1}];
+                    auto& v2 = vertices[std::tuple{p2, n2}];
+                    if (v0 == 0) { v0 = ++vcount; vertexPositions.emplace_back(positions[p0 - 1]); vertexAttributes.emplace_back(normals[n0 - 1], 0xFFFFFFFFu); }
+                    if (v1 == 0) { v1 = ++vcount; vertexPositions.emplace_back(positions[p1 - 1]); vertexAttributes.emplace_back(normals[n1 - 1], 0xFFFFFFFFu); }
+                    if (v2 == 0) { v2 = ++vcount; vertexPositions.emplace_back(positions[p2 - 1]); vertexAttributes.emplace_back(normals[n2 - 1], 0xFFFFFFFFu); }
+                    indices.emplace_back(TriangleIndices{v0 - 1, v1 - 1, v2 - 1});
+                    triangleParams.emplace_back(0xFFFF'FFFFu);
+                };
+
+            uint32_t p0;
+            uint32_t p1;
+            uint32_t p2;
+            uint32_t p3;
+            uint32_t t0;
+            uint32_t t1;
+            uint32_t t2;
+            uint32_t t3;
+            uint32_t n0;
+            uint32_t n1;
+            uint32_t n2;
+            uint32_t n3;
+            auto matches = sscanf(line.data(), "f %u/%u/%u %u/%u/%u %u/%u/%u %u/%u/%u", &p0, &t0, &n0, &p1, &t1, &n1, &p2, &t2, &n2, &p3, &t3, &n3);
+            if (matches >= 9)
+            {
+                addTriangle(p0, p2, p1, n0, n2, n1);
+            }
+            if (matches >= 12)
+            {
+                addTriangle(p0, p3, p2, n0, n3, n2);
+            }
+
+            if (indices.size() >= (0x100000 / 12) - 2)
+            {
+                result.push_back(CreateModel(uploader, renderDevice, { indices, triangleParams }, { vertexPositions, vertexAttributes }));
+
+                vertices.clear();
+
+                vertexPositions.clear();
+                vertexAttributes.clear();
+
+                indices.clear();
+                triangleParams.clear();
+
+                vcount = 0;
+            }
+        }
+    }
+
+    if (!indices.empty())
+    {
+        result.push_back(CreateModel(uploader, renderDevice, { indices, triangleParams }, { vertexPositions, vertexAttributes }));
+    }
+
+    return result;
+}
+
 
 
 struct Assets
@@ -670,7 +792,9 @@ struct Assets
     std::shared_ptr<ModelManager   > modelManager;
     std::shared_ptr<InstanceManager> instanceManager;
     Model::Id                        cube;
+    Model::Id                        objModel;
     Instance::Id                     cubeInstances[2];
+    std::vector<Instance::Id>        objModelInstances;
 };
 
 Assets LoadAssets(RenderDevice& renderDevice)
@@ -821,6 +945,20 @@ Assets LoadAssets(RenderDevice& renderDevice)
     assets.cube             = assets.modelManager->AllocateNewModel(renderDevice, CreateCubeModel(uploader, renderDevice));
     assets.cubeInstances[0] = assets.instanceManager->AllocateNewInstance(renderDevice, *assets.modelManager, Instance{assets.cube});
     assets.cubeInstances[1] = assets.instanceManager->AllocateNewInstance(renderDevice, *assets.modelManager, Instance{assets.cube});
+    
+    {
+        auto& instance = assets.instanceManager->GetInstance(assets.cubeInstances[1]);
+
+        instance.Yaw   = static_cast<uint16_t>(rand());
+        instance.Pitch = static_cast<uint16_t>(rand());
+        instance.Roll  = static_cast<uint16_t>(rand());
+    }
+
+    for (auto& model : LoadObjModel(uploader, renderDevice))
+    {
+        assets.objModel = assets.modelManager->AllocateNewModel(renderDevice, std::move(model));
+        assets.objModelInstances.push_back(assets.instanceManager->AllocateNewInstance(renderDevice, *assets.modelManager, Instance{assets.objModel}));
+    }
 
     return assets;
 }
@@ -959,7 +1097,7 @@ XMMATRIX XMMatrixInversePerspectiveFovInfiniteRH(float FovAngleY, float AspectRa
 // Prepare to render the next frame.
 void AnimateAssets(RenderDevice const& renderDevice, Assets const& assets)
 {
-    XMFLOAT3 const eye{ 0, 0, -3 };
+    XMFLOAT3 const eye{ 0, 25, -25 };
     XMFLOAT3 const at { 0, 0,  0 };
     XMFLOAT3 const up { 0, 1,  0 };
 
@@ -975,6 +1113,10 @@ void AnimateAssets(RenderDevice const& renderDevice, Assets const& assets)
 
     UpdateModelInstance(renderDevice, *assets.instanceManager, assets.cubeInstances[0]);
     UpdateModelInstance(renderDevice, *assets.instanceManager, assets.cubeInstances[1]);
+    for (auto instanceId : assets.objModelInstances)
+    {
+        UpdateStaticModelInstance(renderDevice, *assets.instanceManager, instanceId);
+    }
 }
 
 RenderDevice* pRenderDevice;
