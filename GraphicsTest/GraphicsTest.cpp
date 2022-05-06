@@ -14,6 +14,9 @@
 #define MAX_INSTANCE_DEFINITIONS 1000
 
 
+XMMATRIX View;
+XMMATRIX Projection;
+XMMATRIX InverseProjection;
 XMMATRIX ViewProj;
 
 
@@ -42,6 +45,7 @@ struct Model
     ComPtr<ID3D12Resource>   TriangleIndices          {};
     D3D12_INDEX_BUFFER_VIEW  TriangleIndicesView      {};
     ComPtr<ID3D12Resource>   TriangleParametersBuffer {};
+
     uint32_t                 VertexCount              = 0;
     ComPtr<ID3D12Resource>   VertexPositionsBuffer    {};
     D3D12_VERTEX_BUFFER_VIEW VertexPositionsBufferView{};
@@ -221,6 +225,7 @@ Model::Id ModelManager::AllocateNewModel(RenderDevice& renderDevice, Model&& mod
 
 struct InstanceAttributes
 {
+    XMFLOAT4X4 View;
     XMFLOAT4X4 Projection;
     uint32_t   ModelIndex;
     uint32_t   Padding[3];
@@ -269,6 +274,21 @@ struct InstanceManager
     AttributesBuffer const& GetCurrentFrameInstanceAttributes(RenderDevice const& renderDevice) const { return AttributesBufferList[renderDevice.frameIndex]; }
 
     InstanceAttributes& GetCurrentFrameInstanceAttributes(RenderDevice const& renderDevice, Instance::Id const id) { return (*AttributesBufferList[renderDevice.frameIndex].pAttributes)[GetInstanceIndex(id)]; }
+
+    struct iterator
+    {
+        uint32_t Index;
+
+        iterator& operator++() { ++Index; return *this; }
+        iterator operator++(int) { auto const result = *this; ++Index; return result; }
+
+        Instance::Id operator*() { return static_cast<Instance::Id>(Index + 1); }
+
+        friend auto operator!=(iterator const a, iterator const b) { return a.Index != b.Index; }
+    };
+
+    iterator begin() const { return iterator{ 0 }; }
+    iterator end  () const { return iterator{ InstanceCount }; }
 };
 
 InstanceManager::InstanceManager(RenderDevice& renderDevice)
@@ -315,19 +335,9 @@ void UpdateModelInstance(RenderDevice const& renderDevice, InstanceManager& inst
     XMMATRIX const modelMatrix = XMMatrixRotationRollPitchYaw(instance.Pitch * (2.0f * XM_PI / 65536.0f), instance.Yaw * (2.0f * XM_PI / 65536.0f), instance.Roll * (2.0f * XM_PI / 65536.0));
 
     auto& attributes = instanceManager.GetCurrentFrameInstanceAttributes(renderDevice, instanceId);
+    XMStoreFloat4x4(&attributes.View      , XMMatrixTranspose(modelMatrix * View    ));
     XMStoreFloat4x4(&attributes.Projection, XMMatrixTranspose(modelMatrix * ViewProj));
 };
-
-void DrawModelInstance(RenderDevice const& renderDevice, ModelManager const& modelManager, InstanceManager const& instanceManager, Instance::Id const instanceId)
-{
-    auto& instance = instanceManager.GetInstance(instanceId);
-    auto& model    = modelManager   .GetModel   (instance.ModelId);
-    renderDevice.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    renderDevice.commandList->IASetIndexBuffer      (&model.TriangleIndicesView);
-    renderDevice.commandList->IASetVertexBuffers    (0, 1, &model.VertexPositionsBufferView);
-    renderDevice.commandList->SetGraphicsRoot32BitConstant(0, instanceManager.GetInstanceIndex(instanceId), 0);
-    renderDevice.commandList->DrawIndexedInstanced  (model.TriangleCount * 3, 1, 0, 0, 0);
-}
 
 
 
@@ -344,8 +354,7 @@ struct VisibilityPass
 
     VisibilityPass(RenderDevice& renderDevice);
 
-    void StartPass(RenderDevice const&, ModelManager const&, InstanceManager const&) const;
-    void EndPass  (RenderDevice const&) const;
+    void Render(RenderDevice const&, ModelManager const&, InstanceManager const&) const;
 };
 
 VisibilityPass::VisibilityPass(RenderDevice& renderDevice)
@@ -384,7 +393,7 @@ VisibilityPass::VisibilityPass(RenderDevice& renderDevice)
     DepthBuffer      = CreateIntermediateDepthBuffer (renderDevice, 1280, 720, 0, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 }
 
-void VisibilityPass::StartPass(RenderDevice const& renderDevice, ModelManager const&, InstanceManager const& instanceManager) const
+void VisibilityPass::Render(RenderDevice const& renderDevice, ModelManager const& modelManager, InstanceManager const& instanceManager) const
 {
     renderDevice.commandList->SetGraphicsRootSignature(RootSignature.Get());
     renderDevice.commandList->SetPipelineState        (PipelineState.Get());
@@ -408,34 +417,77 @@ void VisibilityPass::StartPass(RenderDevice const& renderDevice, ModelManager co
     renderDevice.commandList->ClearRenderTargetView(rtvHandle, VisibilityBuffer.ClearColor.data(), 0, nullptr);
     renderDevice.commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, DepthBuffer.ClearValue, 0, 0, nullptr);
     renderDevice.commandList->SetGraphicsRootDescriptorTable(1, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(instanceManager.GetCurrentFrameInstanceAttributes(renderDevice).SrvIndex));
-}
 
-void VisibilityPass::EndPass(RenderDevice const& renderDevice) const
-{
+    for (auto instanceId : instanceManager)
+    {
+        auto& instance = instanceManager.GetInstance(instanceId);
+        if (instance.ModelId == Model::Id::Invalid)
+        {
+            continue;
+        }
+        auto& model = modelManager.GetModel(instance.ModelId);
+        renderDevice.commandList->IASetPrimitiveTopology      (D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        renderDevice.commandList->IASetIndexBuffer            (&model.TriangleIndicesView);
+        renderDevice.commandList->IASetVertexBuffers          (0, 1, &model.VertexPositionsBufferView);
+        renderDevice.commandList->SetGraphicsRoot32BitConstant(0, instanceManager.GetInstanceIndex(instanceId), 0);
+        renderDevice.commandList->DrawIndexedInstanced        (model.TriangleCount * 3, 1, 0, 0, 0);
+    }
+
     TransitionResource(renderDevice.commandList, VisibilityBuffer.Resource, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     TransitionResource(renderDevice.commandList, DepthBuffer     .Resource, D3D12_RESOURCE_STATE_DEPTH_WRITE  , D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 }
 
 
 
+template < typename T >
+struct CpuAccessibleBuffer
+{
+    ComPtr<ID3D12Resource> Buffer{};
+    T*                     pData = nullptr;
+
+    CpuAccessibleBuffer() = default;
+
+    explicit CpuAccessibleBuffer(RenderDevice& renderDevice);
+
+    explicit operator bool() const { return pData != nullptr; }
+    operator ComRef<ID3D12Resource>() const { return Buffer; }
+    operator T*  () const { return pData; }
+    T& operator* () const { return *pData; }
+    T* operator->() const { return pData; }
+};
+
+template < typename T >
+CpuAccessibleBuffer<T>::CpuAccessibleBuffer(RenderDevice& renderDevice)
+    : Buffer{ CreateUploadBuffer(renderDevice.device, sizeof(*pData)) }
+{
+    D3D12_RANGE const readRange{ .Begin = 0, .End = 0 }; // We do not intend to read from this resource on the CPU.
+    ThrowIfFailed(Buffer->Map(0, &readRange, reinterpret_cast<void**>(&pData)));
+}
 
 struct ColorPass
 {
     ComPtr<ID3D12RootSignature> RootSignature;
     ComPtr<ID3D12PipelineState> PipelineState;
 
+    struct SceneConstants
+    {
+        XMFLOAT4X4 InverseProjection;
+    };
+    CpuAccessibleBuffer<SceneConstants> SceneConstantsBuffer[FrameCount];
+
     ColorPass(RenderDevice& renderDevice);
 
-    void StartPass(RenderDevice const&, IntermediateRenderTarget const&, ModelManager const& modelManager, InstanceManager const& instanceManager) const;
-    void EndPass  (RenderDevice const&) const;
+    void Render(RenderDevice const&, VisibilityPass const&, ModelManager const&, InstanceManager const&) const;
 };
 
 ColorPass::ColorPass(RenderDevice& renderDevice)
 {
     // Create the rendering root signature.
     RootSignature = renderDevice.CreateRootSignature<
-        Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SrvRange<0, 1                    , 0>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SrvRange<1, 1                    , 0>>,
+        Root::Cbv<  D3D12_SHADER_VISIBILITY_PIXEL,                0,                        0 >,
+        Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SrvRange<0, 1,                     0>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SrvRange<1, 1,                     0>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SrvRange<2, 1,                     0>>,
         Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS, 1>>,
         Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS, 2>>,
         Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS, 3>>,
@@ -455,26 +507,35 @@ ColorPass::ColorPass(RenderDevice& renderDevice)
             .RTVFormats            { DXGI_FORMAT_R8G8B8A8_UNORM, },
         }
     );
+
+    for (auto& buffer : SceneConstantsBuffer)
+    {
+        buffer = CpuAccessibleBuffer<SceneConstants>{renderDevice};
+    }
 }
 
-void ColorPass::StartPass(RenderDevice const& renderDevice, IntermediateRenderTarget const& visibilityBuffer, ModelManager const& modelManager, InstanceManager const& instanceManager) const
+void ColorPass::Render(RenderDevice const& renderDevice, VisibilityPass const& visibilityPass, ModelManager const& modelManager, InstanceManager const& instanceManager) const
 {
+    auto& sceneConstants = SceneConstantsBuffer[renderDevice.frameIndex];
+    XMStoreFloat4x4(&sceneConstants->InverseProjection, XMMatrixTranspose(InverseProjection));
+
     renderDevice.commandList->SetGraphicsRootSignature(RootSignature.Get());
     renderDevice.commandList->SetPipelineState        (PipelineState.Get());
 
     ID3D12DescriptorHeap* const heaps[]{ renderDevice.srvDescriptorHeap };
     renderDevice.commandList->SetDescriptorHeaps(1, heaps);
-    renderDevice.commandList->SetGraphicsRootDescriptorTable(0, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(instanceManager.GetCurrentFrameInstanceAttributes(renderDevice).SrvIndex));
-    renderDevice.commandList->SetGraphicsRootDescriptorTable(1, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(visibilityBuffer.SrvDescriptorIndex));
 
-    renderDevice.commandList->SetGraphicsRootDescriptorTable(2, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetTriangleIndicesDescriptorTable()));
-    renderDevice.commandList->SetGraphicsRootDescriptorTable(3, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetTriangleParametersDescriptorTable()));
-    renderDevice.commandList->SetGraphicsRootDescriptorTable(4, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetVertexPositionsDescriptorTable()));
-    renderDevice.commandList->SetGraphicsRootDescriptorTable(5, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetVertexAttributesDescriptorTable()));
-}
+    renderDevice.commandList->SetGraphicsRootConstantBufferView(0, SceneConstantsBuffer[renderDevice.frameIndex].Buffer->GetGPUVirtualAddress());
+    renderDevice.commandList->SetGraphicsRootDescriptorTable   (1, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(instanceManager.GetCurrentFrameInstanceAttributes(renderDevice).SrvIndex));
+    renderDevice.commandList->SetGraphicsRootDescriptorTable   (2, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(visibilityPass.VisibilityBuffer.SrvDescriptorIndex));
+    renderDevice.commandList->SetGraphicsRootDescriptorTable   (3, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(visibilityPass.DepthBuffer     .SrvDescriptorIndex));
 
-void ColorPass::EndPass(RenderDevice const& renderDevice) const
-{
+    renderDevice.commandList->SetGraphicsRootDescriptorTable(4, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetTriangleIndicesDescriptorTable   ()));
+    renderDevice.commandList->SetGraphicsRootDescriptorTable(5, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetTriangleParametersDescriptorTable()));
+    renderDevice.commandList->SetGraphicsRootDescriptorTable(6, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetVertexPositionsDescriptorTable   ()));
+    renderDevice.commandList->SetGraphicsRootDescriptorTable(7, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetVertexAttributesDescriptorTable  ()));
+
+    renderDevice.commandList->DrawInstanced(3, 1, 0, 0);
 }
 
 
@@ -797,10 +858,7 @@ void RenderFrame(RenderDevice& renderDevice, Assets const& assets)
         TransitionResource(renderDevice.commandList, assets.objectTarget.Resource, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
 
-    assets.visibilityPass->StartPass(renderDevice, *assets.modelManager, *assets.instanceManager);
-    DrawModelInstance(renderDevice, *assets.modelManager, *assets.instanceManager, assets.cubeInstances[0]);
-    DrawModelInstance(renderDevice, *assets.modelManager, *assets.instanceManager, assets.cubeInstances[1]);
-    assets.visibilityPass->EndPass(renderDevice);
+    assets.visibilityPass->Render(renderDevice, *assets.modelManager, *assets.instanceManager);
 
 
 
@@ -821,11 +879,81 @@ void RenderFrame(RenderDevice& renderDevice, Assets const& assets)
 
 
 
-    assets.colorPass->StartPass(renderDevice, assets.visibilityPass->VisibilityBuffer, *assets.modelManager, *assets.instanceManager);
-    renderDevice.commandList->DrawInstanced(3, 1, 0, 0);
-    assets.colorPass->EndPass(renderDevice);
+    assets.colorPass->Render(renderDevice, *assets.visibilityPass, *assets.modelManager, *assets.instanceManager);
 
     renderDevice.PresentFrame();
+}
+
+XMMATRIX XMMatrixPerspectiveFovInfiniteRH(float FovAngleY, float AspectRatio, float NearZ) noexcept
+{
+    assert(NearZ > 0.f);
+    assert(!XMScalarNearEqual(FovAngleY, 0.0f, 0.00001f * 2.0f));
+    assert(!XMScalarNearEqual(AspectRatio, 0.0f, 0.00001f));
+
+    float    SinFov;
+    float    CosFov;
+    XMScalarSinCos(&SinFov, &CosFov, 0.5f * FovAngleY);
+
+    float Height = CosFov / SinFov;
+    float Width = Height / AspectRatio;
+
+    XMFLOAT4X4 M;
+    M.m[0][0] = Width;
+    M.m[0][1] = 0.0f;
+    M.m[0][2] = 0.0f;
+    M.m[0][3] = 0.0f;
+
+    M.m[1][0] = 0.0f;
+    M.m[1][1] = Height;
+    M.m[1][2] = 0.0f;
+    M.m[1][3] = 0.0f;
+
+    M.m[2][0] = 0.0f;
+    M.m[2][1] = 0.0f;
+    M.m[2][2] = 0.0f;
+    M.m[2][3] = -1.0f;
+
+    M.m[3][0] = 0.0f;
+    M.m[3][1] = 0.0f;
+    M.m[3][2] = NearZ;
+    M.m[3][3] = 0.0f;
+    return XMLoadFloat4x4(&M);
+}
+
+XMMATRIX XMMatrixInversePerspectiveFovInfiniteRH(float FovAngleY, float AspectRatio, float NearZ) noexcept
+{
+    assert(NearZ > 0.f);
+    assert(!XMScalarNearEqual(FovAngleY, 0.0f, 0.00001f * 2.0f));
+    assert(!XMScalarNearEqual(AspectRatio, 0.0f, 0.00001f));
+
+    float    SinFov;
+    float    CosFov;
+    XMScalarSinCos(&SinFov, &CosFov, 0.5f * FovAngleY);
+
+    float Height = CosFov / SinFov;
+    float Width = Height / AspectRatio;
+
+    XMFLOAT4X4 M;
+    M.m[0][0] = Width;
+    M.m[0][1] = 0.0f;
+    M.m[0][2] = 0.0f;
+    M.m[0][3] = 0.0f;
+
+    M.m[1][0] = 0.0f;
+    M.m[1][1] = Height;
+    M.m[1][2] = 0.0f;
+    M.m[1][3] = 0.0f;
+
+    M.m[2][0] = 0.0f;
+    M.m[2][1] = 0.0f;
+    M.m[2][2] = 0.0f;
+    M.m[2][3] = -1.0f;
+
+    M.m[3][0] = 0.0f;
+    M.m[3][1] = 0.0f;
+    M.m[3][2] = NearZ;
+    M.m[3][3] = 0.0f;
+    return XMLoadFloat4x4(&M);
 }
 
 // Prepare to render the next frame.
@@ -835,13 +963,15 @@ void AnimateAssets(RenderDevice const& renderDevice, Assets const& assets)
     XMFLOAT3 const at { 0, 0,  0 };
     XMFLOAT3 const up { 0, 1,  0 };
 
-    XMMATRIX view = XMMatrixLookAtRH(XMLoadFloat3(&eye), XMLoadFloat3(&at), XMLoadFloat3(&up));
+    View = XMMatrixLookAtRH(XMLoadFloat3(&eye), XMLoadFloat3(&at), XMLoadFloat3(&up));
 
     float const fovAngleY = 90.0f;
     float const fovRadiansY = fovAngleY * XM_PI / 180.0f;
-    XMMATRIX proj = XMMatrixPerspectiveFovRH(fovRadiansY, 1280.0 / 720.0, D3D12_FLOAT32_MAX, 0.0001f);
+    Projection = XMMatrixPerspectiveFovInfiniteRH(fovRadiansY, 1280.0 / 720.0, 0.0001f);
 
-    ViewProj = view * proj;
+    InverseProjection = XMMatrixInverse(nullptr, Projection);
+
+    ViewProj = View * Projection;
 
     UpdateModelInstance(renderDevice, *assets.instanceManager, assets.cubeInstances[0]);
     UpdateModelInstance(renderDevice, *assets.instanceManager, assets.cubeInstances[1]);

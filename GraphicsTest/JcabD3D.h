@@ -372,8 +372,8 @@ template < D3D12_ROOT_PARAMETER_TYPE type, D3D12_SHADER_VISIBILITY visibility, U
     };
 };
 
-template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space, D3D12_ROOT_DESCRIPTOR_FLAGS flags > using Cbv = Descriptor<D3D12_ROOT_PARAMETER_TYPE_CBV, visibility, reg, space, flags>;
-template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space, D3D12_ROOT_DESCRIPTOR_FLAGS flags > using Srv = Descriptor<D3D12_ROOT_PARAMETER_TYPE_SRV, visibility, reg, space, flags>;
+template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space, D3D12_ROOT_DESCRIPTOR_FLAGS flags = D3D12_ROOT_DESCRIPTOR_FLAG_NONE> using Cbv = Descriptor<D3D12_ROOT_PARAMETER_TYPE_CBV, visibility, reg, space, flags>;
+template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space, D3D12_ROOT_DESCRIPTOR_FLAGS flags = D3D12_ROOT_DESCRIPTOR_FLAG_NONE> using Srv = Descriptor<D3D12_ROOT_PARAMETER_TYPE_SRV, visibility, reg, space, flags>;
 
 template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space, UINT count > struct Constants
 {
