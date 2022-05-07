@@ -398,15 +398,15 @@ VisibilityPass::VisibilityPass(RenderDevice& renderDevice)
                 .VS                    = Compile(Shader{ L"model.hlsl", "VisibilityVS", "vs_5_1" }),
                 .PS                    = Compile(Shader{ L"model.hlsl", "VisibilityPS", "ps_5_1" }),
                 .DepthStencilState     = DefaultDepthStencilDesc,
-                .Multisampling         = Pipeline::NoMultisampling,
+                .Multisampling         = Pipeline::Multisampling<8>,
                 .RTVFormats            { DXGI_FORMAT_R32_UINT, },
                 .DSVFormat             = DXGI_FORMAT_D32_FLOAT,
             }
         );
     }
 
-    VisibilityBuffer = CreateIntermediateRenderTarget(renderDevice, 1280, 720, DXGI_FORMAT_R32_UINT, {}, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    DepthBuffer      = CreateIntermediateDepthBuffer (renderDevice, 1280, 720, 0, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    VisibilityBuffer = CreateIntermediateRenderTarget(renderDevice, 1280, 720, DXGI_FORMAT_R32_UINT, {}, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_FLAG_NONE, 8);
+    DepthBuffer      = CreateIntermediateDepthBuffer (renderDevice, 1280, 720, 0, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, 8);
 }
 
 void VisibilityPass::Render(RenderDevice const& renderDevice, ModelManager const& modelManager, InstanceManager const& instanceManager) const

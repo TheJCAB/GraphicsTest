@@ -610,7 +610,8 @@ IntermediateRenderTarget CreateIntermediateRenderTarget(
     DXGI_FORMAT           const format,
     std::array<float, 4>  const clearColor,
     D3D12_RESOURCE_STATES const initialState,
-    D3D12_RESOURCE_FLAGS  const flags
+    D3D12_RESOURCE_FLAGS  const flags,
+    uint32_t              const msaa
 )
 {
     IntermediateRenderTarget renderTarget
@@ -635,7 +636,7 @@ IntermediateRenderTarget CreateIntermediateRenderTarget(
         .DepthOrArraySize = 1,
         .MipLevels        = 1,
         .Format           = format,
-        .SampleDesc       { .Count = 1, .Quality = 0 },
+        .SampleDesc       { .Count = msaa, .Quality = 0 },
         .Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN,
         .Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | flags,
     };
@@ -665,7 +666,7 @@ IntermediateRenderTarget CreateIntermediateRenderTarget(
     renderTarget.SrvDescriptorIndex = renderDevice.AllocateSrvDescriptor(renderTarget.Resource,
         {
             .Format                  = format,
-            .ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D,
+            .ViewDimension           = msaa > 1 ? D3D12_SRV_DIMENSION_TEXTURE2DMS : D3D12_SRV_DIMENSION_TEXTURE2D,
             .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
             .Texture2D               { .MipLevels = 1 },
         }
@@ -679,7 +680,8 @@ IntermediateDepthBuffer CreateIntermediateDepthBuffer(
     UINT                  const width,
     UINT                  const height,
     float                 const clearValue,
-    D3D12_RESOURCE_STATES const initialState
+    D3D12_RESOURCE_STATES const initialState,
+    uint32_t              const msaa
 )
 {
     IntermediateDepthBuffer depthBuffer
@@ -704,7 +706,7 @@ IntermediateDepthBuffer CreateIntermediateDepthBuffer(
         .DepthOrArraySize = 1,
         .MipLevels        = 1,
         .Format           = DXGI_FORMAT_D32_FLOAT,
-        .SampleDesc       { .Count = 1, .Quality = 0 },
+        .SampleDesc       { .Count = msaa, .Quality = 0 },
         .Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN,
         .Flags            = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL,
     };
@@ -737,7 +739,7 @@ IntermediateDepthBuffer CreateIntermediateDepthBuffer(
 
         D3D12_SHADER_RESOURCE_VIEW_DESC const srvDesc{
             .Format                  = DXGI_FORMAT_R32_FLOAT,
-            .ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D,
+            .ViewDimension           = msaa > 1 ? D3D12_SRV_DIMENSION_TEXTURE2DMS : D3D12_SRV_DIMENSION_TEXTURE2D,
             .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
             .Texture2D               { .MipLevels = 1 },
         };

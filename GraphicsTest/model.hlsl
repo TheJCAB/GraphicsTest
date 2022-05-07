@@ -61,8 +61,8 @@ struct SceneConstants
 
 ConstantBuffer<SceneConstants> sceneConstants : register(b0);
 
-Texture2D<uint>  visibilityMap : register(t1, space0);
-Texture2D<float> depthMap      : register(t2, space0);
+Texture2DMS<uint>  visibilityMap : register(t1, space0);
+Texture2DMS<float> depthMap      : register(t2, space0);
 
 Buffer<uint3>                      indices         [MAX_MODEL_DEFINITIONS] : register(t1, space1);
 StructuredBuffer<TriangleParams>   triangleParams  [MAX_MODEL_DEFINITIONS] : register(t1, space2);
@@ -74,54 +74,69 @@ RWTexture2D<float4> colorUav : register(u0, space0);
 [numthreads(16, 16, 1)]
 void ColorPass(uint3 pos : SV_DispatchThreadID)
 {
-    uint v = visibilityMap[pos.xy];
-    uint tri  = v & 0xFFFFF;
-    uint instanceId = v >> 20;
+    float4 color = 0;
 
-    if (instanceId == 0)
+    for (int s = 0; s < 8; ++s)
     {
-        return;
+        uint v = visibilityMap.sample[s][pos.xy];
+        uint tri  = v & 0xFFFFF;
+        uint instanceId = v >> 20;
+
+        if (instanceId == 0)
+        {
+            continue;
+        }
+        --instanceId;
+
+        uint     modelIndex  = instanceList[instanceId].ModelIndex;
+        float4x4 modelToView = instanceList[instanceId].View;
+
+        uint3 i = indices[modelIndex].Load(tri);
+
+        float3 normal0 = mul(vertexAttributes[modelIndex][i[0]].Normal, (float3x3)modelToView);
+        float3 normal1 = mul(vertexAttributes[modelIndex][i[1]].Normal, (float3x3)modelToView);
+        float3 normal2 = mul(vertexAttributes[modelIndex][i[2]].Normal, (float3x3)modelToView);
+
+        float3 viewPos0 = mul(float4(vertexPositions[modelIndex][i[0]], 1), modelToView).xyz;
+        float3 viewPos1 = mul(float4(vertexPositions[modelIndex][i[1]], 1), modelToView).xyz;
+        float3 viewPos2 = mul(float4(vertexPositions[modelIndex][i[2]], 1), modelToView).xyz;
+
+        float3 N = cross(viewPos1 - viewPos0, viewPos2 - viewPos0);
+        float N2 = dot(N, N);
+
+        float depth = 0.0001f / depthMap.sample[s][pos.xy];
+        float2 spos = pos.xy + visibilityMap.GetSamplePosition(s);
+        float2 normPos = float2(
+                   spos.x * (2 / 1280.0f) - 1.0f,
+            1.0f - spos.y * (2 /  720.0f)
+        );
+        float3 viewPos = depth * float3(
+            normPos.x * (1280.0 / 720.0f),
+            normPos.y                    ,
+            -1
+        );
+
+        float3 bary = clamp(float3(
+            dot(cross(viewPos1 - viewPos, viewPos2 - viewPos), N),
+            dot(cross(viewPos2 - viewPos, viewPos0 - viewPos), N),
+            dot(cross(viewPos0 - viewPos, viewPos1 - viewPos), N)
+        ) / N2, 0, 1);
+
+        bary = bary / dot(bary, 1);
+
+        float3 normal = normal0 * bary[0] + normal1 * bary[1] + normal2 * bary[2];
+
+        color += float4(float3(1, 1, 1) * dot(normal, normalize(float3(1, 1, 1))), 1);
     }
-    --instanceId;
 
-    uint     modelIndex  = instanceList[instanceId].ModelIndex;
-    float4x4 modelToView = instanceList[instanceId].View;
-
-    uint3 i = indices[modelIndex].Load(tri);
-
-    float3 normal0 = mul(vertexAttributes[modelIndex][i[0]].Normal, (float3x3)modelToView);
-    float3 normal1 = mul(vertexAttributes[modelIndex][i[1]].Normal, (float3x3)modelToView);
-    float3 normal2 = mul(vertexAttributes[modelIndex][i[2]].Normal, (float3x3)modelToView);
-
-    float3 viewPos0 = mul(float4(vertexPositions[modelIndex][i[0]], 1), modelToView).xyz;
-    float3 viewPos1 = mul(float4(vertexPositions[modelIndex][i[1]], 1), modelToView).xyz;
-    float3 viewPos2 = mul(float4(vertexPositions[modelIndex][i[2]], 1), modelToView).xyz;
-
-    float3 N = cross(viewPos1 - viewPos0, viewPos2 - viewPos0);
-    float N2 = dot(N, N);
-
-    float depth = 0.0001f / depthMap[pos.xy];
-    float2 normPos = float2(
-               (pos.x + 0.5) * (2 / 1280.0f) - 1.0f,
-        1.0f - (pos.y + 0.5) * (2 /  720.0f)
-    );
-    float3 viewPos = depth * float3(
-        normPos.x * (1280.0 / 720.0f),
-        normPos.y                    ,
-        -1
-    );
-
-    float3 bary = clamp(float3(
-        dot(cross(viewPos1 - viewPos, viewPos2 - viewPos), N),
-        dot(cross(viewPos2 - viewPos, viewPos0 - viewPos), N),
-        dot(cross(viewPos0 - viewPos, viewPos1 - viewPos), N)
-    ) / N2, 0, 1);
-
-    bary = bary / dot(bary, 1);
-
-    float3 normal = normal0 * bary[0] + normal1 * bary[1] + normal2 * bary[2];
-
-    colorUav[pos.xy] = float4(1, 1, 1, 1) * dot(normal, normalize(float3(1, 1, 1)));
+    if (color.w == 0)
+    {
+        colorUav[pos.xy] = float4(0.3, 0, 0, 1);
+    }
+    else
+    {
+        colorUav[pos.xy] = float4(color.xyz / color.w, 1);
+    }
 
     //uint color = triangleParams[tri].Color;
     //return float4(
@@ -142,12 +157,12 @@ void ColorPass(uint3 pos : SV_DispatchThreadID)
 [numthreads(8, 8, 1)]
 void Postprocess(uint3 pos : SV_DispatchThreadID)
 {
-    uint v = visibilityMap[pos.xy];
-
-    if ((v >> 20) == 0)
-    {
-        colorUav[pos.xy] = float4(0.3, 0, 0, 1);
-    }
+    //uint v = visibilityMap[pos.xy];
+    //
+    //if ((v >> 20) == 0)
+    //{
+    //    colorUav[pos.xy] = float4(0.3, 0, 0, 1);
+    //}
 }
 
 

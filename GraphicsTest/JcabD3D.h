@@ -530,6 +530,8 @@ struct MultisamplingState
 
 constexpr MultisamplingState NoMultisampling{};
 
+template < uint8_t msaa > constexpr MultisamplingState Multisampling{ .Count = msaa };
+
 constexpr D3D12_DEPTH_STENCIL_DESC NoDepthStencil{ .DepthEnable = FALSE, .StencilEnable = FALSE };
 
 struct State
@@ -617,7 +619,8 @@ IntermediateRenderTarget CreateIntermediateRenderTarget(
     DXGI_FORMAT           ,
     std::array<float, 4>  clearColor,
     D3D12_RESOURCE_STATES initialState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-    D3D12_RESOURCE_FLAGS  = D3D12_RESOURCE_FLAG_NONE
+    D3D12_RESOURCE_FLAGS  = D3D12_RESOURCE_FLAG_NONE,
+    uint32_t              msaa = 1
 );
 
 struct IntermediateDepthBuffer
@@ -635,5 +638,6 @@ IntermediateDepthBuffer CreateIntermediateDepthBuffer(
     UINT                  width,
     UINT                  height,
     float                 clearValue,
-    D3D12_RESOURCE_STATES initialState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+    D3D12_RESOURCE_STATES initialState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+    uint32_t              msaa = 1
 );
