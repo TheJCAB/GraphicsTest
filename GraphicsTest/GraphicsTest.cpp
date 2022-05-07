@@ -561,7 +561,7 @@ void ColorPass::Render(RenderDevice const& renderDevice, VisibilityPass const& v
     renderDevice.commandList->SetComputeRootDescriptorTable(7, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetVertexPositionsDescriptorTable   ()));
     renderDevice.commandList->SetComputeRootDescriptorTable(8, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetVertexAttributesDescriptorTable  ()));
 
-    renderDevice.commandList->Dispatch(1280 / 16, 720 / 16, 1);
+    renderDevice.commandList->Dispatch(1280 / 64, 720 / 16, 1);
 }
 
 
