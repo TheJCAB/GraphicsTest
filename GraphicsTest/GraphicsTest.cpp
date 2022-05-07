@@ -377,9 +377,9 @@ VisibilityPass::VisibilityPass(RenderDevice& renderDevice)
 {
     // Create the rendering root signature.
     RootSignature = renderDevice.CreateRootSignature<
-        Root::Constants<D3D12_SHADER_VISIBILITY_ALL, 0, 0, 1>, // Constant buffer
-        Root::Table<D3D12_SHADER_VISIBILITY_VERTEX, Root::SrvRange<0, 1, 0>>, // Instance buffer
-        Root::Flags<D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT>
+        Root::Constants<D3D12_SHADER_VISIBILITY_ALL   ,                0,    0, 1>, // Constant buffer
+        Root::Table    <D3D12_SHADER_VISIBILITY_VERTEX, Root::SrvRange<0, 1, 0>>,   // Instance buffer
+        Root::Flags    <D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT>
     >();
 
     // Create the pipeline state, which includes compiling and loading shaders.
@@ -485,6 +485,9 @@ struct ColorPass
     ComPtr<ID3D12RootSignature> RootSignature;
     ComPtr<ID3D12PipelineState> PipelineState;
 
+    IntermediateRenderTarget ColorBuffer;
+    UINT                     ColorBufferUav = 0;
+
     struct SceneConstants
     {
         XMFLOAT4X4 InverseProjection;
@@ -524,6 +527,14 @@ ColorPass::ColorPass(RenderDevice& renderDevice)
         }
     );
 
+    ColorBuffer = CreateIntermediateRenderTarget(renderDevice, 1280, 720, DXGI_FORMAT_R8G8B8A8_UNORM, {}, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    ColorBufferUav = renderDevice.AllocateUavDescriptor(ColorBuffer.Resource,
+        {
+            .Format        = DXGI_FORMAT_R8G8B8A8_UNORM,
+            .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D,
+        }
+    );
+
     for (auto& buffer : SceneConstantsBuffer)
     {
         buffer = CpuAccessibleBuffer<SceneConstants>{renderDevice};
@@ -532,6 +543,17 @@ ColorPass::ColorPass(RenderDevice& renderDevice)
 
 void ColorPass::Render(RenderDevice const& renderDevice, VisibilityPass const& visibilityPass, ModelManager const& modelManager, InstanceManager const& instanceManager) const
 {
+    {
+        TransitionResource(renderDevice.commandList, ColorBuffer.Resource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        auto const rtvHandle = renderDevice.rtvDescriptorHeap.GetCpuDescriptorHandle(ColorBuffer.RtvDescriptorIndex);
+        renderDevice.commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
+        renderDevice.commandList->RSSetViewports    (1, &renderDevice.viewport);
+        renderDevice.commandList->RSSetScissorRects (1, &renderDevice.scissorRect);
+
+        float const clearColor[4]{};
+        renderDevice.commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
+    }
+
     auto& sceneConstants = SceneConstantsBuffer[renderDevice.frameIndex];
     XMStoreFloat4x4(&sceneConstants->InverseProjection, XMMatrixTranspose(InverseProjection));
 
@@ -550,6 +572,106 @@ void ColorPass::Render(RenderDevice const& renderDevice, VisibilityPass const& v
     renderDevice.commandList->SetGraphicsRootDescriptorTable(5, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetTriangleParametersDescriptorTable()));
     renderDevice.commandList->SetGraphicsRootDescriptorTable(6, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetVertexPositionsDescriptorTable   ()));
     renderDevice.commandList->SetGraphicsRootDescriptorTable(7, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetVertexAttributesDescriptorTable  ()));
+
+    renderDevice.commandList->DrawInstanced(3, 1, 0, 0);
+}
+
+
+
+
+
+
+struct PostprocessPass
+{
+    ComPtr<ID3D12RootSignature> RootSignature;
+    ComPtr<ID3D12PipelineState> PipelineState;
+
+    PostprocessPass(RenderDevice& renderDevice);
+
+    void Render(RenderDevice const&, VisibilityPass const&, ColorPass const&) const;
+};
+
+PostprocessPass::PostprocessPass(RenderDevice& renderDevice)
+{
+    // Create the rendering root signature.
+    RootSignature = renderDevice.CreateRootSignature<
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, 1, 0>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<0, 1, 0>>
+    >();
+
+    // Create the pipeline state, which includes compiling and loading shaders.
+    PipelineState = renderDevice.Create(Compute::State
+        {
+            .RootSignature{ RootSignature },
+            .CS           = Compile(Shader{ L"model.hlsl", "Postprocess", "cs_5_1" }),
+        }
+    );
+}
+
+void PostprocessPass::Render(RenderDevice const& renderDevice, VisibilityPass const& visibilityPass, ColorPass const& colorPass) const
+{
+    TransitionResource(renderDevice.commandList, colorPass.ColorBuffer.Resource, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    renderDevice.commandList->SetComputeRootSignature(RootSignature.Get());
+    renderDevice.commandList->SetPipelineState       (PipelineState.Get());
+
+    ID3D12DescriptorHeap* const heaps[]{ renderDevice.srvDescriptorHeap };
+    renderDevice.commandList->SetDescriptorHeaps(1, heaps);
+
+    renderDevice.commandList->SetComputeRootDescriptorTable(0, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(visibilityPass.VisibilityBuffer.SrvDescriptorIndex));
+    renderDevice.commandList->SetComputeRootDescriptorTable(1, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(colorPass.ColorBufferUav));
+
+    renderDevice.commandList->Dispatch(1280/8, 720/8, 1);
+}
+
+
+
+
+
+
+
+struct ResolvePass
+{
+    ComPtr<ID3D12RootSignature> RootSignature;
+    ComPtr<ID3D12PipelineState> PipelineState;
+
+    ResolvePass(RenderDevice& renderDevice);
+
+    void Render(RenderDevice const&, ColorPass const&) const;
+};
+
+ResolvePass::ResolvePass(RenderDevice& renderDevice)
+{
+    // Create the rendering root signature.
+    RootSignature = renderDevice.CreateRootSignature<
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<2, 1, 0>>
+    >();
+
+    // Create the pipeline state, which includes compiling and loading shaders.
+    PipelineState = renderDevice.Create(Pipeline::State
+        {
+            .RootSignature         { RootSignature },
+            .TopologyType          = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+            .VS                    = Compile(Shader{ L"model.hlsl", "ResolveVS", "vs_5_1" }),
+            .PS                    = Compile(Shader{ L"model.hlsl", "ResolvePS", "ps_5_1" }),
+            .DepthStencilState     = Pipeline::NoDepthStencil,
+            .Multisampling         = Pipeline::NoMultisampling,
+            .RTVFormats            { DXGI_FORMAT_R8G8B8A8_UNORM, },
+        }
+    );
+}
+
+void ResolvePass::Render(RenderDevice const& renderDevice, ColorPass const& colorPass) const
+{
+    TransitionResource(renderDevice.commandList, colorPass.ColorBuffer.Resource, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+
+    renderDevice.commandList->SetGraphicsRootSignature(RootSignature.Get());
+    renderDevice.commandList->SetPipelineState        (PipelineState.Get());
+
+    ID3D12DescriptorHeap* const heaps[]{ renderDevice.srvDescriptorHeap };
+    renderDevice.commandList->SetDescriptorHeaps(1, heaps);
+
+    renderDevice.commandList->SetGraphicsRootDescriptorTable(0, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(colorPass.ColorBuffer.SrvDescriptorIndex));
 
     renderDevice.commandList->DrawInstanced(3, 1, 0, 0);
 }
@@ -789,6 +911,8 @@ struct Assets
 
     std::shared_ptr<VisibilityPass>  visibilityPass;
     std::shared_ptr<ColorPass>       colorPass;
+    std::shared_ptr<PostprocessPass> postprocessPass;
+    std::shared_ptr<ResolvePass>     resolvePass;
     std::shared_ptr<ModelManager   > modelManager;
     std::shared_ptr<InstanceManager> instanceManager;
     Model::Id                        cube;
@@ -940,6 +1064,8 @@ Assets LoadAssets(RenderDevice& renderDevice)
 
     assets.visibilityPass   = std::make_shared<VisibilityPass> (renderDevice);
     assets.colorPass        = std::make_shared<ColorPass>      (renderDevice);
+    assets.postprocessPass  = std::make_shared<PostprocessPass>(renderDevice);
+    assets.resolvePass      = std::make_shared<ResolvePass>    (renderDevice);
     assets.modelManager     = std::make_shared<ModelManager>   (renderDevice);
     assets.instanceManager  = std::make_shared<InstanceManager>(renderDevice);
     assets.cube             = assets.modelManager->AllocateNewModel(renderDevice, CreateCubeModel(uploader, renderDevice));
@@ -990,6 +1116,7 @@ void RenderFrame(RenderDevice& renderDevice, Assets const& assets)
     
         float const clearColor[4]{};
         renderDevice.commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
+
         renderDevice.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         renderDevice.commandList->DrawInstanced(3, 1, 0, 0);
     
@@ -1000,24 +1127,28 @@ void RenderFrame(RenderDevice& renderDevice, Assets const& assets)
 
 
 
-    renderDevice.StartFrame();
-
-    renderDevice.commandList->SetGraphicsRootSignature(assets.renderSignature.Get());
-    renderDevice.commandList->SetPipelineState(assets.pipelineState.Get());
-
-    ID3D12DescriptorHeap* const heaps[]{ renderDevice.srvDescriptorHeap, renderDevice.samplerDescriptorHeap };
-    renderDevice.commandList->SetDescriptorHeaps(2, heaps);
-    renderDevice.commandList->SetGraphicsRootDescriptorTable(0, renderDevice.srvDescriptorHeap    .GetGpuDescriptorHandle(assets.objectTarget.SrvDescriptorIndex));
-    renderDevice.commandList->SetGraphicsRootDescriptorTable(1, renderDevice.samplerDescriptorHeap.GetGpuDescriptorHandle(assets.objectTargetSampleWrapDescriptorIndex));
-
-    // Record commands.
-    renderDevice.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    renderDevice.commandList->IASetVertexBuffers(0, 1, &assets.vertexBufferView);
-    renderDevice.commandList->DrawInstanced(3, 1, 0, 0);
+    //renderDevice.commandList->SetGraphicsRootSignature(assets.renderSignature.Get());
+    //renderDevice.commandList->SetPipelineState(assets.pipelineState.Get());
+    //
+    //ID3D12DescriptorHeap* const heaps[]{ renderDevice.srvDescriptorHeap, renderDevice.samplerDescriptorHeap };
+    //renderDevice.commandList->SetDescriptorHeaps(2, heaps);
+    //renderDevice.commandList->SetGraphicsRootDescriptorTable(0, renderDevice.srvDescriptorHeap    .GetGpuDescriptorHandle(assets.objectTarget.SrvDescriptorIndex));
+    //renderDevice.commandList->SetGraphicsRootDescriptorTable(1, renderDevice.samplerDescriptorHeap.GetGpuDescriptorHandle(assets.objectTargetSampleWrapDescriptorIndex));
+    //
+    //// Record commands.
+    //renderDevice.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    //renderDevice.commandList->IASetVertexBuffers(0, 1, &assets.vertexBufferView);
+    //renderDevice.commandList->DrawInstanced(3, 1, 0, 0);
 
 
 
     assets.colorPass->Render(renderDevice, *assets.visibilityPass, *assets.modelManager, *assets.instanceManager);
+
+    assets.postprocessPass->Render(renderDevice, *assets.visibilityPass, *assets.colorPass);
+
+    renderDevice.StartFrame();
+
+    assets.resolvePass->Render(renderDevice, *assets.colorPass);
 
     renderDevice.PresentFrame();
 }

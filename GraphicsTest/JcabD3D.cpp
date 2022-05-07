@@ -187,7 +187,7 @@ RenderDevice RenderDevice::Create(HWND const hwnd)
         .Height      = 720,
         .Format      = DXGI_FORMAT_R8G8B8A8_UNORM,
         .SampleDesc  { .Count = 1 },
-        .BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT,
+        .BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT | DXGI_USAGE_SHADER_INPUT,
         .BufferCount = FrameCount,
         .SwapEffect  = DXGI_SWAP_EFFECT_FLIP_DISCARD,
     };
@@ -220,11 +220,11 @@ RenderDevice RenderDevice::Create(HWND const hwnd)
 
     // Create frame resources.
     {
-        auto rtvIndex = renderDevice.rtvDescriptorHeap.AllocateDescriptors(2);
+        auto rtvIndex = renderDevice.rtvDescriptorHeap.AllocateDescriptors(FrameCount);
         assert(rtvIndex == 0);
         auto rtvHandle = renderDevice.rtvDescriptorHeap.GetCpuDescriptorHandle(0);
 
-        // Create a RTV and a command allocator for each frame.
+         // Create a RTV and a command allocator for each frame.
         for (UINT n = 0; n < FrameCount; n++)
         {
             ThrowIfFailed(renderDevice.swapChain->GetBuffer(n, IID_PPV_ARGS(&renderDevice.renderTargets[n])));
@@ -233,6 +233,25 @@ RenderDevice RenderDevice::Create(HWND const hwnd)
             rtvHandle = renderDevice.rtvDescriptorHeap.NextDescriptorHandle(rtvHandle);
 
             ThrowIfFailed(renderDevice.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&renderDevice.commandAllocators[n])));
+        }
+    }
+    {
+        auto srvIndex = renderDevice.srvDescriptorHeap.AllocateDescriptors(FrameCount);
+        assert(srvIndex == 0);
+        auto srvHandle = renderDevice.srvDescriptorHeap.GetCpuDescriptorHandle(0);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC const srvDesc{
+            .Format                  = swapChainDesc.Format,
+            .ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D,
+            .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+            .Texture2D               { .MipLevels = 1 },
+        };
+
+        // Create a SRV descriptor for each frame.
+        for (UINT n = 0; n < FrameCount; n++)
+        {
+            renderDevice.device->CreateShaderResourceView(renderDevice.renderTargets[n].Get(), &srvDesc, srvHandle);
+            srvHandle = renderDevice.rtvDescriptorHeap.NextDescriptorHandle(srvHandle);
         }
     }
 
@@ -279,10 +298,23 @@ void RenderDevice::UploadSrvDescriptor(UINT index, ComRef<ID3D12Resource> const 
     device->CreateShaderResourceView(resource, &desc, handle);
 }
 
+void RenderDevice::UploadUavDescriptor(UINT index, ComRef<ID3D12Resource> const resource, D3D12_UNORDERED_ACCESS_VIEW_DESC const& desc)
+{
+    auto handle = srvDescriptorHeap.GetCpuDescriptorHandle(index);
+    device->CreateUnorderedAccessView(resource, nullptr, &desc, handle);
+}
+
 UINT RenderDevice::AllocateSrvDescriptor(ComRef<ID3D12Resource> const resource, D3D12_SHADER_RESOURCE_VIEW_DESC const& desc)
 {
     auto const index = srvDescriptorHeap.AllocateDescriptors(1);
     UploadSrvDescriptor(index, resource, desc);
+    return index;
+}
+
+UINT RenderDevice::AllocateUavDescriptor(ComRef<ID3D12Resource> const resource, D3D12_UNORDERED_ACCESS_VIEW_DESC const& desc)
+{
+    auto const index = srvDescriptorHeap.AllocateDescriptors(1);
+    UploadUavDescriptor(index, resource, desc);
     return index;
 }
 
@@ -470,6 +502,19 @@ ComPtr<ID3D12PipelineState> RenderDevice::Create(Pipeline::State const& state)
     return result;
 }
 
+ComPtr<ID3D12PipelineState> RenderDevice::Create(Compute::State const& state)
+{
+    ComPtr<ID3D12PipelineState> result;
+
+    D3D12_COMPUTE_PIPELINE_STATE_DESC const desc
+    {
+        .pRootSignature = state.RootSignature,
+        .CS             = GetShaderBytecode(state.CS),
+    };
+    ThrowIfFailed(device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&result)));
+    return result;
+}
+
 ComPtr<ID3D12Resource> CreateUploadBuffer(ComRef<ID3D12Device> const device, UINT const size)
 {
     ComPtr<ID3D12Resource> uploadBuffer;
@@ -564,7 +609,8 @@ IntermediateRenderTarget CreateIntermediateRenderTarget(
     UINT                  const height,
     DXGI_FORMAT           const format,
     std::array<float, 4>  const clearColor,
-    D3D12_RESOURCE_STATES const initialState
+    D3D12_RESOURCE_STATES const initialState,
+    D3D12_RESOURCE_FLAGS  const flags
 )
 {
     IntermediateRenderTarget renderTarget
@@ -591,7 +637,7 @@ IntermediateRenderTarget CreateIntermediateRenderTarget(
         .Format           = format,
         .SampleDesc       { .Count = 1, .Quality = 0 },
         .Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN,
-        .Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+        .Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | flags,
     };
     D3D12_CLEAR_VALUE const clear
     {

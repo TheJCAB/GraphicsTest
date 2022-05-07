@@ -47,6 +47,7 @@ inline void ThrowIfFailed(HRESULT hr)
 
 namespace Root     { template < typename... args > struct SignatureDescription; }
 namespace Pipeline {                               struct State;                }
+namespace Compute  {                               struct State;                }
 
 
 
@@ -141,11 +142,15 @@ struct RenderDevice
     template < typename... args > ComPtr<ID3D12RootSignature> CreateRootSignature() const;
 
     ComPtr<ID3D12PipelineState> Create(Pipeline::State const&);
+    ComPtr<ID3D12PipelineState> Create(Compute::State const&);
 
     ComPtr<ID3D12GraphicsCommandList> CreateDirectCommandList(ComRef<ID3D12CommandAllocator>, ComRef<ID3D12PipelineState> = nullptr) const;
 
     void UploadSrvDescriptor(UINT index, ComRef<ID3D12Resource>, D3D12_SHADER_RESOURCE_VIEW_DESC const&);
+    void UploadUavDescriptor(UINT index, ComRef<ID3D12Resource>, D3D12_UNORDERED_ACCESS_VIEW_DESC const&);
+
     UINT AllocateSrvDescriptor(ComRef<ID3D12Resource>, D3D12_SHADER_RESOURCE_VIEW_DESC const&);
+    UINT AllocateUavDescriptor(ComRef<ID3D12Resource>, D3D12_UNORDERED_ACCESS_VIEW_DESC const&);
 
     void ExecuteCommandList(ComRef<ID3D12GraphicsCommandList>);
 
@@ -338,6 +343,11 @@ namespace Root
 template < UINT base, UINT count = 1, UINT space = 0 > struct SrvRange
 {
     static constexpr D3D12_DESCRIPTOR_RANGE1 Range{ .RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV, .NumDescriptors = count, .BaseShaderRegister = base, .RegisterSpace = space, .OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
+};
+
+template < UINT base, UINT count = 1, UINT space = 0 > struct UavRange
+{
+    static constexpr D3D12_DESCRIPTOR_RANGE1 Range{ .RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV, .NumDescriptors = count, .BaseShaderRegister = base, .RegisterSpace = space, .OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
 };
 
 template < UINT base, UINT count = 1 > struct SamplerRange
@@ -546,6 +556,19 @@ struct State
 // namespace Pipeline
 
 
+namespace Compute
+{
+
+struct State
+{
+    ComRef<ID3D12RootSignature>   RootSignature;
+    ComPtr<ID3DBlob>              CS;
+};
+
+}
+// namespace Compute
+
+
 class AssetUploader
 {
 public:
@@ -593,7 +616,8 @@ IntermediateRenderTarget CreateIntermediateRenderTarget(
     UINT                  height,
     DXGI_FORMAT           ,
     std::array<float, 4>  clearColor,
-    D3D12_RESOURCE_STATES initialState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+    D3D12_RESOURCE_STATES initialState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+    D3D12_RESOURCE_FLAGS  = D3D12_RESOURCE_FLAG_NONE
 );
 
 struct IntermediateDepthBuffer
