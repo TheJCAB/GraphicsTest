@@ -69,27 +69,18 @@ StructuredBuffer<TriangleParams>   triangleParams  [MAX_MODEL_DEFINITIONS] : reg
 StructuredBuffer<float3>           vertexPositions [MAX_MODEL_DEFINITIONS] : register(t1, space3);
 StructuredBuffer<VertexAttributes> vertexAttributes[MAX_MODEL_DEFINITIONS] : register(t1, space4);
 
-float4 ColorVS(uint index : SV_VertexID) : SV_Position
+RWTexture2D<float4> colorUav : register(u0, space0);
+
+[numthreads(16, 16, 1)]
+void ColorPass(uint3 pos : SV_DispatchThreadID)
 {
-    float4 position;
-
-    position.x = index == 0 ? -3 : 1;
-    position.y = index == 2 ? -3 : 1;
-    position.z = 0.5;
-    position.w = 1;
-
-    return position;
-}
-
-float4 ColorPS(float4 position : SV_Position) : SV_Target
-{
-    uint v = visibilityMap[floor(position.xy)];
+    uint v = visibilityMap[pos.xy];
     uint tri  = v & 0xFFFFF;
     uint instanceId = v >> 20;
 
     if (instanceId == 0)
     {
-        clip(-1);
+        return;
     }
     --instanceId;
 
@@ -109,10 +100,10 @@ float4 ColorPS(float4 position : SV_Position) : SV_Target
     float3 N = cross(viewPos1 - viewPos0, viewPos2 - viewPos0);
     float N2 = dot(N, N);
 
-    float depth = 0.0001f / depthMap[floor(position.xy)];
+    float depth = 0.0001f / depthMap[pos.xy];
     float2 normPos = float2(
-               position.x * (2 / 1280.0f) - 1.0f,
-        1.0f - position.y * (2 /  720.0f)
+               (pos.x + 0.5) * (2 / 1280.0f) - 1.0f,
+        1.0f - (pos.y + 0.5) * (2 /  720.0f)
     );
     float3 viewPos = depth * float3(
         normPos.x * (1280.0 / 720.0f),
@@ -130,7 +121,7 @@ float4 ColorPS(float4 position : SV_Position) : SV_Target
 
     float3 normal = normal0 * bary[0] + normal1 * bary[1] + normal2 * bary[2];
 
-    return float4(1, 1, 1, 1) * dot(normal, normalize(float3(1, 1, 1)));
+    colorUav[pos.xy] = float4(1, 1, 1, 1) * dot(normal, normalize(float3(1, 1, 1)));
 
     //uint color = triangleParams[tri].Color;
     //return float4(
@@ -148,13 +139,9 @@ float4 ColorPS(float4 position : SV_Position) : SV_Target
 }
 
 
-RWTexture2D<float4> colorUav : register(u0, space0);
-
 [numthreads(8, 8, 1)]
 void Postprocess(uint3 pos : SV_DispatchThreadID)
 {
-    //uint3 pos = uint2(instance / 720, instance % 720, 0);
-
     uint v = visibilityMap[pos.xy];
 
     if ((v >> 20) == 0)

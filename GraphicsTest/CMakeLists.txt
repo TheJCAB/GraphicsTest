@@ -26,7 +26,6 @@ function(copy_hlsl_file TargetName File)
     add_dependencies(${TargetName} ${File}_TARGET)
 endfunction()
 
-copy_hlsl_file(GraphicsTest shaders.hlsl)
 copy_hlsl_file(GraphicsTest model.hlsl)
 
 # TODO: Add tests and install targets if needed.

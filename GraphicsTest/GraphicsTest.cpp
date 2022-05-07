@@ -503,27 +503,23 @@ ColorPass::ColorPass(RenderDevice& renderDevice)
 {
     // Create the rendering root signature.
     RootSignature = renderDevice.CreateRootSignature<
-        Root::Cbv<  D3D12_SHADER_VISIBILITY_PIXEL,                0,                        0 >,
-        Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SrvRange<0, 1,                     0>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SrvRange<1, 1,                     0>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SrvRange<2, 1,                     0>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS, 1>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS, 2>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS, 3>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS, 4>>,
+        Root::Cbv<  D3D12_SHADER_VISIBILITY_ALL,                0,                        0 >,
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<0, 1,                     0>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, 1,                     0>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<2, 1,                     0>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<0, 1,                     0>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS, 1>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS, 2>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS, 3>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS, 4>>,
         Root::Flags<D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT>
     >();
 
     // Create the pipeline state, which includes compiling and loading shaders.
-    PipelineState = renderDevice.Create(Pipeline::State
+    PipelineState = renderDevice.Create(Compute::State
         {
-            .RootSignature         { RootSignature },
-            .TopologyType          = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-            .VS                    = Compile(Shader{ L"model.hlsl", "ColorVS", "vs_5_1" }),
-            .PS                    = Compile(Shader{ L"model.hlsl", "ColorPS", "ps_5_1" }),
-            .DepthStencilState     = Pipeline::NoDepthStencil,
-            .Multisampling         = Pipeline::NoMultisampling,
-            .RTVFormats            { DXGI_FORMAT_R8G8B8A8_UNORM, },
+            .RootSignature{ RootSignature },
+            .CS           = Compile(Shader{ L"model.hlsl", "ColorPass", "cs_5_1" }),
         }
     );
 
@@ -543,37 +539,29 @@ ColorPass::ColorPass(RenderDevice& renderDevice)
 
 void ColorPass::Render(RenderDevice const& renderDevice, VisibilityPass const& visibilityPass, ModelManager const& modelManager, InstanceManager const& instanceManager) const
 {
-    {
-        TransitionResource(renderDevice.commandList, ColorBuffer.Resource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
-        auto const rtvHandle = renderDevice.rtvDescriptorHeap.GetCpuDescriptorHandle(ColorBuffer.RtvDescriptorIndex);
-        renderDevice.commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
-        renderDevice.commandList->RSSetViewports    (1, &renderDevice.viewport);
-        renderDevice.commandList->RSSetScissorRects (1, &renderDevice.scissorRect);
-
-        float const clearColor[4]{};
-        renderDevice.commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
-    }
+    TransitionResource(renderDevice.commandList, ColorBuffer.Resource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
     auto& sceneConstants = SceneConstantsBuffer[renderDevice.frameIndex];
     XMStoreFloat4x4(&sceneConstants->InverseProjection, XMMatrixTranspose(InverseProjection));
 
-    renderDevice.commandList->SetGraphicsRootSignature(RootSignature.Get());
-    renderDevice.commandList->SetPipelineState        (PipelineState.Get());
+    renderDevice.commandList->SetComputeRootSignature(RootSignature.Get());
+    renderDevice.commandList->SetPipelineState       (PipelineState.Get());
 
     ID3D12DescriptorHeap* const heaps[]{ renderDevice.srvDescriptorHeap };
     renderDevice.commandList->SetDescriptorHeaps(1, heaps);
 
-    renderDevice.commandList->SetGraphicsRootConstantBufferView(0, SceneConstantsBuffer[renderDevice.frameIndex].Buffer->GetGPUVirtualAddress());
-    renderDevice.commandList->SetGraphicsRootDescriptorTable   (1, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(instanceManager.GetCurrentFrameInstanceAttributes(renderDevice).SrvIndex));
-    renderDevice.commandList->SetGraphicsRootDescriptorTable   (2, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(visibilityPass.VisibilityBuffer.SrvDescriptorIndex));
-    renderDevice.commandList->SetGraphicsRootDescriptorTable   (3, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(visibilityPass.DepthBuffer     .SrvDescriptorIndex));
+    renderDevice.commandList->SetComputeRootConstantBufferView(0, SceneConstantsBuffer[renderDevice.frameIndex].Buffer->GetGPUVirtualAddress());
+    renderDevice.commandList->SetComputeRootDescriptorTable   (1, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(instanceManager.GetCurrentFrameInstanceAttributes(renderDevice).SrvIndex));
+    renderDevice.commandList->SetComputeRootDescriptorTable   (2, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(visibilityPass.VisibilityBuffer.SrvDescriptorIndex));
+    renderDevice.commandList->SetComputeRootDescriptorTable   (3, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(visibilityPass.DepthBuffer     .SrvDescriptorIndex));
+    renderDevice.commandList->SetComputeRootDescriptorTable   (4, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(ColorBufferUav));
 
-    renderDevice.commandList->SetGraphicsRootDescriptorTable(4, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetTriangleIndicesDescriptorTable   ()));
-    renderDevice.commandList->SetGraphicsRootDescriptorTable(5, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetTriangleParametersDescriptorTable()));
-    renderDevice.commandList->SetGraphicsRootDescriptorTable(6, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetVertexPositionsDescriptorTable   ()));
-    renderDevice.commandList->SetGraphicsRootDescriptorTable(7, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetVertexAttributesDescriptorTable  ()));
+    renderDevice.commandList->SetComputeRootDescriptorTable(5, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetTriangleIndicesDescriptorTable   ()));
+    renderDevice.commandList->SetComputeRootDescriptorTable(6, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetTriangleParametersDescriptorTable()));
+    renderDevice.commandList->SetComputeRootDescriptorTable(7, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetVertexPositionsDescriptorTable   ()));
+    renderDevice.commandList->SetComputeRootDescriptorTable(8, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetVertexAttributesDescriptorTable  ()));
 
-    renderDevice.commandList->DrawInstanced(3, 1, 0, 0);
+    renderDevice.commandList->Dispatch(1280 / 16, 720 / 16, 1);
 }
 
 
@@ -610,7 +598,7 @@ PostprocessPass::PostprocessPass(RenderDevice& renderDevice)
 
 void PostprocessPass::Render(RenderDevice const& renderDevice, VisibilityPass const& visibilityPass, ColorPass const& colorPass) const
 {
-    TransitionResource(renderDevice.commandList, colorPass.ColorBuffer.Resource, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    //TransitionResource(renderDevice.commandList, colorPass.ColorBuffer.Resource, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
     renderDevice.commandList->SetComputeRootSignature(RootSignature.Get());
     renderDevice.commandList->SetPipelineState       (PipelineState.Get());
