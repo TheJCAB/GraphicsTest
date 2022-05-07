@@ -83,7 +83,7 @@ float4 ColorVS(uint index : SV_VertexID) : SV_Position
 
 float4 ColorPS(float4 position : SV_Position) : SV_Target
 {
-    uint v = visibilityMap.Load(int3(floor(position.xy), 0));
+    uint v = visibilityMap[floor(position.xy)];
     uint tri  = v & 0xFFFFF;
     uint instanceId = v >> 20;
 
@@ -93,15 +93,44 @@ float4 ColorPS(float4 position : SV_Position) : SV_Target
     }
     --instanceId;
 
-    uint modelId = instanceList[instanceId].ModelIndex;
+    uint     modelIndex  = instanceList[instanceId].ModelIndex;
+    float4x4 modelToView = instanceList[instanceId].View;
 
-    uint3 i = indices[modelId].Load(tri);
+    uint3 i = indices[modelIndex].Load(tri);
 
-    float3 normal0 = vertexAttributes[modelId][i[0]].Normal;
-    //float3 normal1 = vertexPositions[modelId][i[1]].Normal;
-    //float3 normal2 = vertexPositions[modelId][i[2]].Normal;
+    float3 normal0 = mul(vertexAttributes[modelIndex][i[0]].Normal, (float3x3)modelToView);
+    float3 normal1 = mul(vertexAttributes[modelIndex][i[1]].Normal, (float3x3)modelToView);
+    float3 normal2 = mul(vertexAttributes[modelIndex][i[2]].Normal, (float3x3)modelToView);
 
-    return float4(abs(normal0), 1);
+    float3 viewPos0 = mul(float4(vertexPositions[modelIndex][i[0]], 1), modelToView).xyz;
+    float3 viewPos1 = mul(float4(vertexPositions[modelIndex][i[1]], 1), modelToView).xyz;
+    float3 viewPos2 = mul(float4(vertexPositions[modelIndex][i[2]], 1), modelToView).xyz;
+
+    float3 N = cross(viewPos1 - viewPos0, viewPos2 - viewPos0);
+    float N2 = dot(N, N);
+
+    float depth = 0.0001f / depthMap[floor(position.xy)];
+    float2 normPos = float2(
+               position.x * (2 / 1280.0f) - 1.0f,
+        1.0f - position.y * (2 /  720.0f)
+    );
+    float3 viewPos = depth * float3(
+        normPos.x * (1280.0 / 720.0f),
+        normPos.y                    ,
+        -1
+    );
+
+    float3 bary = clamp(float3(
+        dot(cross(viewPos1 - viewPos, viewPos2 - viewPos), N),
+        dot(cross(viewPos2 - viewPos, viewPos0 - viewPos), N),
+        dot(cross(viewPos0 - viewPos, viewPos1 - viewPos), N)
+    ) / N2, 0, 1);
+
+    bary = bary / dot(bary, 1);
+
+    float3 normal = normal0 * bary[0] + normal1 * bary[1] + normal2 * bary[2];
+
+    return float4(1, 1, 1, 1) * dot(normal, normalize(float3(1, 1, 1)));
 
     //uint color = triangleParams[tri].Color;
     //return float4(

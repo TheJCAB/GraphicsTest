@@ -897,24 +897,14 @@ std::vector<Model> LoadObjModel(AssetUploader& uploader, RenderDevice& renderDev
 
 struct Assets
 {
-    ComPtr<ID3D12RootSignature>       rootSignature;
-
-    IntermediateRenderTarget             objectTarget;
-    ComPtr<ID3D12PipelineState>       objectTargetPipelineState;
-
-    UINT                              objectTargetSampleWrapDescriptorIndex;
-
-    ComPtr<ID3D12RootSignature>       renderSignature;
-    ComPtr<ID3D12PipelineState>       pipelineState;
-    ComPtr<ID3D12Resource>            vertexBuffer;
-    D3D12_VERTEX_BUFFER_VIEW          vertexBufferView;
-
     std::shared_ptr<VisibilityPass>  visibilityPass;
     std::shared_ptr<ColorPass>       colorPass;
     std::shared_ptr<PostprocessPass> postprocessPass;
     std::shared_ptr<ResolvePass>     resolvePass;
+
     std::shared_ptr<ModelManager   > modelManager;
     std::shared_ptr<InstanceManager> instanceManager;
+
     Model::Id                        cube;
     Model::Id                        objModel;
     Instance::Id                     cubeInstances[2];
@@ -927,140 +917,25 @@ Assets LoadAssets(RenderDevice& renderDevice)
 
     AssetUploader uploader{ renderDevice };
 
-    // Create an empty root signature.
-    assets.rootSignature = renderDevice.CreateRootSignature<
-        Root::Flags<D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT>
-    >();
-
-    // Create the rendering root signature.
-    assets.renderSignature = renderDevice.CreateRootSignature<
-        Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SrvRange    <0, 1>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_PIXEL, Root::SamplerRange<0, 1>>,
-        Root::Flags<D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT>
-    >();
-
-    // Create rendering surfaces.
-    assets.objectTarget = CreateIntermediateRenderTarget(renderDevice, 1280, 720, DXGI_FORMAT_R32_UINT, {}, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-
-    {
-        assets.objectTargetSampleWrapDescriptorIndex = renderDevice.samplerDescriptorHeap.AllocateDescriptors(1);
-        auto handle = renderDevice.samplerDescriptorHeap.GetCpuDescriptorHandle(assets.objectTargetSampleWrapDescriptorIndex);
-
-        D3D12_SAMPLER_DESC const wrapSamplerDesc
-        {
-            .Filter         = D3D12_FILTER_MIN_MAG_MIP_LINEAR,
-            .AddressU       = D3D12_TEXTURE_ADDRESS_MODE_WRAP,
-            .AddressV       = D3D12_TEXTURE_ADDRESS_MODE_WRAP,
-            .AddressW       = D3D12_TEXTURE_ADDRESS_MODE_WRAP,
-            .MipLODBias     = 0.0f,
-            .MaxAnisotropy  = 1,
-            .ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS,
-            .BorderColor    {},
-            .MinLOD         = 0,
-            .MaxLOD         = D3D12_FLOAT32_MAX,
-        };
-        renderDevice.device->CreateSampler(&wrapSamplerDesc, handle);
-    }
-
-    // Create the pipeline state, which includes compiling and loading shaders.
-    {
-        // Define the vertex input layout.
-        D3D12_INPUT_ELEMENT_DESC const inputElementDescs[] =
-        {
-            { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT   , 0,  0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-            { "COLOR"   , 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-        };
-
-        assets.pipelineState = renderDevice.Create(Pipeline::State
-            {
-                .RootSignature         { assets.renderSignature },
-                .TopologyType          = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-                .InputLayout           { inputElementDescs, _countof(inputElementDescs) },
-                .VS                    = Compile(Shader{ L"shaders.hlsl", "VSMain", "vs_5_1" }),
-                .PS                    = Compile(Shader{ L"shaders.hlsl", "PSMain", "ps_5_1" }),
-                .DepthStencilState     = Pipeline::NoDepthStencil,
-                .Multisampling         = Pipeline::NoMultisampling,
-                .RTVFormats            { DXGI_FORMAT_R8G8B8A8_UNORM, },
-            }
-        );
-    }
-
-    // Create the fullscreen pipeline state, which includes compiling and loading shaders.
-    assets.objectTargetPipelineState = renderDevice.Create(Pipeline::State
-        {
-            .RootSignature         { assets.rootSignature },
-            .TopologyType          = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-            .VS                    = Compile(Shader{ L"shaders.hlsl", "VSFullScreen", "vs_5_1" }),
-            .PS                    = Compile(Shader{ L"shaders.hlsl", "PSFullScreen", "ps_5_1" }),
-            .DepthStencilState     = Pipeline::NoDepthStencil,
-            .Multisampling         = Pipeline::NoMultisampling,
-            .RTVFormats            { DXGI_FORMAT_R32_UINT, },
-        }
-    );
-
-    // Create the vertex buffer.
-    {
-        constexpr auto aspectRatio = 1280.0f / 712.0f;
-
-        struct Vertex
-        {
-            XMFLOAT3 position;
-            XMFLOAT4 color;
-        };
-
-        // Define the geometry for a triangle.
-        Vertex triangleVertices[] =
-        {
-            { {  0.5f ,  0.25f * aspectRatio, 0.0f }, { 1.0f, 0.0f, 0.0f, 1.0f } },
-            { {  0.25f, -0.25f * aspectRatio, 0.0f }, { 0.0f, 1.0f, 0.0f, 1.0f } },
-            { { -0.25f, -0.25f * aspectRatio, 0.0f }, { 0.0f, 0.0f, 1.0f, 1.0f } },
-        };
-
-        const UINT vertexBufferSize = sizeof(triangleVertices);
-
-        // Note: using upload heaps to transfer static data like vert buffers is not 
-        // recommended. Every time the GPU needs it, the upload heap will be marshalled 
-        // over. Please read up on Default Heap usage. An upload heap is used here for 
-        // code simplicity and because there are very few verts to actually transfer.
-        D3D12_HEAP_PROPERTIES const uploadHeapProperties{
-            .Type                 = D3D12_HEAP_TYPE_UPLOAD,
-            .CPUPageProperty      = D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
-            .MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN,
-            .CreationNodeMask     = 1,
-            .VisibleNodeMask      = 1,
-        };
-        D3D12_RESOURCE_DESC const vertexBufferDesc{
-            .Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER,
-            .Alignment        = 0,
-            .Width            = vertexBufferSize,
-            .Height           = 1,
-            .DepthOrArraySize = 1,
-            .MipLevels        = 1,
-            .Format           = DXGI_FORMAT_UNKNOWN,
-            .SampleDesc       { .Count = 1, .Quality = 0 },
-            .Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
-            .Flags            = D3D12_RESOURCE_FLAG_NONE,
-        };
-        ThrowIfFailed(renderDevice.device->CreateCommittedResource(
-            &uploadHeapProperties,
-            D3D12_HEAP_FLAG_NONE,
-            &vertexBufferDesc,
-            D3D12_RESOURCE_STATE_GENERIC_READ,
-            nullptr,
-            IID_PPV_ARGS(&assets.vertexBuffer)));
-
-        // Copy the triangle data to the vertex buffer.
-        UINT8* pVertexDataBegin;
-        D3D12_RANGE const nullReadRange{ 0, 0 };        // We do not intend to read from this resource on the CPU.
-        ThrowIfFailed(assets.vertexBuffer->Map(0, &nullReadRange, reinterpret_cast<void**>(&pVertexDataBegin)));
-        memcpy(pVertexDataBegin, triangleVertices, sizeof(triangleVertices));
-        assets.vertexBuffer->Unmap(0, nullptr);
-
-        // Initialize the vertex buffer view.
-        assets.vertexBufferView.BufferLocation = assets.vertexBuffer->GetGPUVirtualAddress();
-        assets.vertexBufferView.StrideInBytes  = sizeof(Vertex);
-        assets.vertexBufferView.SizeInBytes    = vertexBufferSize;
-    }
+    //{
+    //    assets.objectTargetSampleWrapDescriptorIndex = renderDevice.samplerDescriptorHeap.AllocateDescriptors(1);
+    //    auto handle = renderDevice.samplerDescriptorHeap.GetCpuDescriptorHandle(assets.objectTargetSampleWrapDescriptorIndex);
+    //
+    //    D3D12_SAMPLER_DESC const wrapSamplerDesc
+    //    {
+    //        .Filter         = D3D12_FILTER_MIN_MAG_MIP_LINEAR,
+    //        .AddressU       = D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+    //        .AddressV       = D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+    //        .AddressW       = D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+    //        .MipLODBias     = 0.0f,
+    //        .MaxAnisotropy  = 1,
+    //        .ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS,
+    //        .BorderColor    {},
+    //        .MinLOD         = 0,
+    //        .MaxLOD         = D3D12_FLOAT32_MAX,
+    //    };
+    //    renderDevice.device->CreateSampler(&wrapSamplerDesc, handle);
+    //}
 
     assets.visibilityPass   = std::make_shared<VisibilityPass> (renderDevice);
     assets.colorPass        = std::make_shared<ColorPass>      (renderDevice);
@@ -1103,44 +978,7 @@ void RenderFrame(RenderDevice& renderDevice, Assets const& assets)
     // re-recording.
     ThrowIfFailed(renderDevice.commandList->Reset(commandAllocator.Get(), nullptr));
 
-
-    {
-        renderDevice.commandList->SetPipelineState(assets.objectTargetPipelineState.Get());
-        renderDevice.commandList->SetGraphicsRootSignature(assets.rootSignature.Get());
-    
-        TransitionResource(renderDevice.commandList, assets.objectTarget.Resource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
-        auto const rtvHandle = renderDevice.rtvDescriptorHeap.GetCpuDescriptorHandle(assets.objectTarget.RtvDescriptorIndex);
-        renderDevice.commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
-        renderDevice.commandList->RSSetViewports    (1, &renderDevice.viewport);
-        renderDevice.commandList->RSSetScissorRects (1, &renderDevice.scissorRect);
-    
-        float const clearColor[4]{};
-        renderDevice.commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
-
-        renderDevice.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        renderDevice.commandList->DrawInstanced(3, 1, 0, 0);
-    
-        TransitionResource(renderDevice.commandList, assets.objectTarget.Resource, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    }
-
     assets.visibilityPass->Render(renderDevice, *assets.modelManager, *assets.instanceManager);
-
-
-
-    //renderDevice.commandList->SetGraphicsRootSignature(assets.renderSignature.Get());
-    //renderDevice.commandList->SetPipelineState(assets.pipelineState.Get());
-    //
-    //ID3D12DescriptorHeap* const heaps[]{ renderDevice.srvDescriptorHeap, renderDevice.samplerDescriptorHeap };
-    //renderDevice.commandList->SetDescriptorHeaps(2, heaps);
-    //renderDevice.commandList->SetGraphicsRootDescriptorTable(0, renderDevice.srvDescriptorHeap    .GetGpuDescriptorHandle(assets.objectTarget.SrvDescriptorIndex));
-    //renderDevice.commandList->SetGraphicsRootDescriptorTable(1, renderDevice.samplerDescriptorHeap.GetGpuDescriptorHandle(assets.objectTargetSampleWrapDescriptorIndex));
-    //
-    //// Record commands.
-    //renderDevice.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    //renderDevice.commandList->IASetVertexBuffers(0, 1, &assets.vertexBufferView);
-    //renderDevice.commandList->DrawInstanced(3, 1, 0, 0);
-
-
 
     assets.colorPass->Render(renderDevice, *assets.visibilityPass, *assets.modelManager, *assets.instanceManager);
 
