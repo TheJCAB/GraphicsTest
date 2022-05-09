@@ -36,6 +36,7 @@ struct VertexAttributes
 struct TriangleParameters
 {
     uint32_t color;
+    uint32_t patch;
 };
 
 
@@ -336,23 +337,26 @@ void UpdateModelInstance(RenderDevice const& renderDevice, InstanceManager& inst
     instance.Roll  += 0x23;
 
     XMMATRIX const modelMatrix = XMMatrixRotationRollPitchYaw(instance.Pitch * (2.0f * XM_PI / 65536.0f), instance.Yaw * (2.0f * XM_PI / 65536.0f), instance.Roll * (2.0f * XM_PI / 65536.0));
+    XMMATRIX const translation = XMMatrixTranslation(4, 0, 0);
 
     auto& attributes = instanceManager.GetCurrentFrameInstanceAttributes(renderDevice, instanceId);
-    XMStoreFloat4x4(&attributes.View      , XMMatrixTranspose(modelMatrix * View    ));
-    XMStoreFloat4x4(&attributes.Projection, XMMatrixTranspose(modelMatrix * ViewProj));
+    XMStoreFloat4x4(&attributes.View      , XMMatrixTranspose(modelMatrix * translation * View    ));
+    XMStoreFloat4x4(&attributes.Projection, XMMatrixTranspose(modelMatrix * translation * ViewProj));
 };
 
 void UpdateStaticModelInstance(RenderDevice const& renderDevice, InstanceManager& instanceManager, Instance::Id const instanceId)
 {
     auto& instance = instanceManager.GetInstance(instanceId);
 
-    instance.Yaw += 5;
+    instance.Yaw += 50;
 
     XMMATRIX const modelMatrix = XMMatrixRotationRollPitchYaw(instance.Pitch * (2.0f * XM_PI / 65536.0f), instance.Yaw * (2.0f * XM_PI / 65536.0f), instance.Roll * (2.0f * XM_PI / 65536.0));
 
+    XMMATRIX const scale = XMMatrixScaling(100, 100, 100);
+
     auto& attributes = instanceManager.GetCurrentFrameInstanceAttributes(renderDevice, instanceId);
-    XMStoreFloat4x4(&attributes.View      , XMMatrixTranspose(modelMatrix * View    ));
-    XMStoreFloat4x4(&attributes.Projection, XMMatrixTranspose(modelMatrix * ViewProj));
+    XMStoreFloat4x4(&attributes.View      , XMMatrixTranspose(scale * modelMatrix * View    ));
+    XMStoreFloat4x4(&attributes.Projection, XMMatrixTranspose(scale * modelMatrix * ViewProj));
 };
 
 
@@ -774,25 +778,23 @@ Model CreateCubeModel(AssetUploader& uploader, RenderDevice& renderDevice)
     return CreateModel(uploader, renderDevice, { indices, triangleParams }, { triangleVertices, vertexAttributes });
 }
 
-
-std::vector<Model> LoadObjModel(AssetUploader& uploader, RenderDevice& renderDevice)
+struct ObjModel
 {
-    std::vector<Model> result;
+    using IndexSet = std::tuple<uint32_t, uint32_t>;
+    using Triangle = std::tuple<IndexSet, IndexSet, IndexSet>;
 
-    std::vector<XMFLOAT3> positions;
-    std::vector<XMFLOAT3> normals;
+    std::vector<XMFLOAT3> Positions;
+    std::vector<XMFLOAT3> Normals;
+    std::vector<Triangle> Triangles;
+};
 
-    std::map<std::tuple<uint32_t, uint32_t>, uint32_t> vertices;
 
-    std::vector<VertexPosition>   vertexPositions;
-    std::vector<VertexAttributes> vertexAttributes;
-
-    std::vector<TriangleIndices> indices;
-    std::vector<TriangleParameters> triangleParams;
-
-    uint32_t vcount = 0;
-
-    auto const f = fopen(R"(C:\Users\jcab\Downloads\ameise\source\Ameise_C\Ameise_C.obj)", "r");
+ObjModel LoadObjModel(AssetUploader& uploader, RenderDevice& renderDevice)
+{
+    ObjModel model;
+    
+    auto const f = fopen(R"(X:\TEMP\MaryRoseTankard_100kMesh.obj)", "r");
+    //auto const f = fopen(R"(C:\Users\jcab\Downloads\ameise\source\Ameise_C\Ameise_C.obj)", "r");
     while (!feof(f))
     {
         std::array<char, 2048> buffer;
@@ -811,29 +813,16 @@ std::vector<Model> LoadObjModel(AssetUploader& uploader, RenderDevice& renderDev
         {
             XMFLOAT3 pos;
             sscanf_s(line.data(), "v %f %f %f", &pos.x, &pos.y, &pos.z);
-            positions.push_back(pos);
+            model.Positions.push_back(pos);
         }
         else if (line[0] == 'v' && line[1] == 'n' && line[2] == ' ')
         {
             XMFLOAT3 norm;
             sscanf_s(line.data(), "vn %f %f %f", &norm.x, &norm.y, &norm.z);
-            normals.push_back(norm);
+            model.Normals.push_back(norm);
         }
         else if (line[0] == 'f' && line[1] == ' ')
         {
-            auto&& addTriangle =
-                [&](uint32_t p0, uint32_t p1, uint32_t p2, uint32_t n0, uint32_t n1, uint32_t n2)
-                {
-                    auto& v0 = vertices[std::tuple{p0, n0}];
-                    auto& v1 = vertices[std::tuple{p1, n1}];
-                    auto& v2 = vertices[std::tuple{p2, n2}];
-                    if (v0 == 0) { v0 = ++vcount; vertexPositions.emplace_back(positions[p0 - 1]); vertexAttributes.emplace_back(normals[n0 - 1], 0xFFFFFFFFu); }
-                    if (v1 == 0) { v1 = ++vcount; vertexPositions.emplace_back(positions[p1 - 1]); vertexAttributes.emplace_back(normals[n1 - 1], 0xFFFFFFFFu); }
-                    if (v2 == 0) { v2 = ++vcount; vertexPositions.emplace_back(positions[p2 - 1]); vertexAttributes.emplace_back(normals[n2 - 1], 0xFFFFFFFFu); }
-                    indices.emplace_back(TriangleIndices{v0 - 1, v1 - 1, v2 - 1});
-                    triangleParams.emplace_back(0xFFFF'FFFFu);
-                };
-
             uint32_t p0;
             uint32_t p1;
             uint32_t p2;
@@ -847,29 +836,142 @@ std::vector<Model> LoadObjModel(AssetUploader& uploader, RenderDevice& renderDev
             uint32_t n2;
             uint32_t n3;
             auto matches = sscanf(line.data(), "f %u/%u/%u %u/%u/%u %u/%u/%u %u/%u/%u", &p0, &t0, &n0, &p1, &t1, &n1, &p2, &t2, &n2, &p3, &t3, &n3);
+            if (matches == 2)
+            {
+                matches = sscanf(line.data(), "f %u/%u %u/%u %u/%u %u/%u", &p0, &t0, &p1, &t1, &p2, &t2, &p3, &t3);
+                n0 = UINT32_MAX;
+                n1 = UINT32_MAX;
+                n2 = UINT32_MAX;
+                n3 = UINT32_MAX;
+                if (matches == 6)
+                {
+                    matches = 9;
+                }
+                else if (matches == 8)
+                {
+                    matches = 12;
+                }
+                else
+                {
+                    matches = 0;
+                }
+            }
             if (matches >= 9)
             {
-                addTriangle(p0, p2, p1, n0, n2, n1);
+                model.Triangles.emplace_back(ObjModel::IndexSet{p0, n0}, ObjModel::IndexSet{p2, n2}, ObjModel::IndexSet{p1, n1});
+
             }
             if (matches >= 12)
             {
-                addTriangle(p0, p3, p2, n0, n3, n2);
+                model.Triangles.emplace_back(ObjModel::IndexSet{p0, n0}, ObjModel::IndexSet{p3, n3}, ObjModel::IndexSet{p2, n2});
             }
+        }
+    }
 
-            if (indices.size() >= (0x100000 / 12) - 2)
+    return model;
+}
+
+void AddObjModelMissingNormals(ObjModel& model)
+{
+    for (auto& [ v0, v1, v2 ] : model.Triangles)
+    {
+        auto& [ p0, n0 ] = v0;
+        auto& [ p1, n1 ] = v1;
+        auto& [ p2, n2 ] = v2;
+
+        if (n0 == UINT32_MAX || n1 == UINT32_MAX || n2 == UINT32_MAX)
+        {
+            uint32_t n = model.Normals.size() + 1;
+            auto xp0 = XMLoadFloat3(&model.Positions[p0 - 1]);
+            auto xp1 = XMLoadFloat3(&model.Positions[p1 - 1]);
+            auto xp2 = XMLoadFloat3(&model.Positions[p2 - 1]);
+            XMFLOAT3 norm;
+            XMStoreFloat3(&norm, XMVector3Normalize(XMVector3Cross(xp2 - xp0, xp1 - xp0)));
+            model.Normals.push_back(norm);
+            if (n0 == UINT32_MAX) n0 = n;
+            if (n1 == UINT32_MAX) n1 = n;
+            if (n2 == UINT32_MAX) n2 = n;
+        }
+    }
+}
+
+void RecenterObjModelPositions(ObjModel& model)
+{
+    XMFLOAT3 vmin{  1e20f,  1e20f,  1e20f };
+    XMFLOAT3 vmax{ -1e20f, -1e20f, -1e20f };
+    for (auto pos : model.Positions)
+    {
+        vmax.x = XMMax(vmax.x, pos.x);
+        vmax.y = XMMax(vmax.y, pos.y);
+        vmax.z = XMMax(vmax.z, pos.z);
+        vmin.x = XMMin(vmin.x, pos.x);
+        vmin.y = XMMin(vmin.y, pos.y);
+        vmin.z = XMMin(vmin.z, pos.z);
+    }
+
+    XMVECTOR center = (XMLoadFloat3(&vmin) + XMLoadFloat3(&vmax)) / 2;
+
+    for (auto& pos : model.Positions)
+    {
+        XMStoreFloat3(&pos, XMLoadFloat3(&pos) - center);
+    }
+}
+
+
+
+std::vector<Model> UploadObjModel(ObjModel const& model, AssetUploader& uploader, RenderDevice& renderDevice)
+{
+    std::vector<Model> result;
+
+    std::map<std::tuple<uint32_t, uint32_t>, uint32_t> vertices;
+
+    std::vector<VertexPosition>   vertexPositions;
+    std::vector<VertexAttributes> vertexAttributes;
+
+    std::vector<TriangleIndices> indices;
+    std::vector<TriangleParameters> triangleParams;
+
+    using Edge = std::tuple<uint32_t, uint32_t>;
+
+    std::map<Edge, uint32_t> edgeTriangleMap;
+
+    uint32_t vcount = 0;
+
+    for (auto const [ v0, v1, v2 ] : model.Triangles)
+    {
+        auto const [ p0, n0 ] = v0;
+        auto const [ p1, n1 ] = v1;
+        auto const [ p2, n2 ] = v2;
+
+        auto&& addTriangle =
+            [&](uint32_t p0, uint32_t p1, uint32_t p2, uint32_t n0, uint32_t n1, uint32_t n2)
             {
-                result.push_back(CreateModel(uploader, renderDevice, { indices, triangleParams }, { vertexPositions, vertexAttributes }));
+                auto& v0 = vertices[std::tuple{p0, n0}];
+                auto& v1 = vertices[std::tuple{p1, n1}];
+                auto& v2 = vertices[std::tuple{p2, n2}];
+                if (v0 == 0) { v0 = ++vcount; vertexPositions.emplace_back(model.Positions[p0 - 1]); vertexAttributes.emplace_back(model.Normals[n0 - 1], 0xFFFFFFFFu); }
+                if (v1 == 0) { v1 = ++vcount; vertexPositions.emplace_back(model.Positions[p1 - 1]); vertexAttributes.emplace_back(model.Normals[n1 - 1], 0xFFFFFFFFu); }
+                if (v2 == 0) { v2 = ++vcount; vertexPositions.emplace_back(model.Positions[p2 - 1]); vertexAttributes.emplace_back(model.Normals[n2 - 1], 0xFFFFFFFFu); }
+                indices.emplace_back(TriangleIndices{v0 - 1, v1 - 1, v2 - 1});
+                triangleParams.emplace_back(0xFFFF'FFFFu);
+            };
 
-                vertices.clear();
 
-                vertexPositions.clear();
-                vertexAttributes.clear();
+        addTriangle(p0, p1, p2, n0, n1, n2);
 
-                indices.clear();
-                triangleParams.clear();
+        if (indices.size() >= (0x100000 / 12) - 2)
+        {
+            result.push_back(CreateModel(uploader, renderDevice, { indices, triangleParams }, { vertexPositions, vertexAttributes }));
 
-                vcount = 0;
-            }
+            vertices.clear();
+
+            vertexPositions.clear();
+            vertexAttributes.clear();
+
+            indices.clear();
+            triangleParams.clear();
+
+            vcount = 0;
         }
     }
 
@@ -943,7 +1045,11 @@ Assets LoadAssets(RenderDevice& renderDevice)
         instance.Roll  = static_cast<uint16_t>(rand());
     }
 
-    for (auto& model : LoadObjModel(uploader, renderDevice))
+    auto objModel = LoadObjModel(uploader, renderDevice);
+    RecenterObjModelPositions(objModel);
+    AddObjModelMissingNormals(objModel);
+
+    for (auto& model : UploadObjModel(objModel, uploader, renderDevice))
     {
         assets.objModel = assets.modelManager->AllocateNewModel(renderDevice, std::move(model));
         assets.objModelInstances.push_back(assets.instanceManager->AllocateNewInstance(renderDevice, *assets.modelManager, Instance{assets.objModel}));
@@ -1054,7 +1160,7 @@ XMMATRIX XMMatrixInversePerspectiveFovInfiniteRH(float FovAngleY, float AspectRa
 // Prepare to render the next frame.
 void AnimateAssets(RenderDevice const& renderDevice, Assets const& assets)
 {
-    XMFLOAT3 const eye{ 0, 25, -25 };
+    XMFLOAT3 const eye{ 0, 10, -10 };
     XMFLOAT3 const at { 0, 0,  0 };
     XMFLOAT3 const up { 0, 1,  0 };
 

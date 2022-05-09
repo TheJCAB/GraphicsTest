@@ -48,9 +48,10 @@ struct VertexAttributes
     uint   Color;
 };
 
-struct TriangleParams
+struct TriangleParamseters
 {
     uint Color;
+    uint Patch;
 };
 
 
@@ -64,10 +65,10 @@ ConstantBuffer<SceneConstants> sceneConstants : register(b0);
 Texture2DMS<uint>  visibilityMap : register(t1, space0);
 Texture2DMS<float> depthMap      : register(t2, space0);
 
-Buffer<uint3>                      indices         [MAX_MODEL_DEFINITIONS] : register(t1, space1);
-StructuredBuffer<TriangleParams>   triangleParams  [MAX_MODEL_DEFINITIONS] : register(t1, space2);
-StructuredBuffer<float3>           vertexPositions [MAX_MODEL_DEFINITIONS] : register(t1, space3);
-StructuredBuffer<VertexAttributes> vertexAttributes[MAX_MODEL_DEFINITIONS] : register(t1, space4);
+Buffer<uint3>                         indices         [MAX_MODEL_DEFINITIONS] : register(t1, space1);
+StructuredBuffer<TriangleParamseters> triangleParams  [MAX_MODEL_DEFINITIONS] : register(t1, space2);
+StructuredBuffer<float3>              vertexPositions [MAX_MODEL_DEFINITIONS] : register(t1, space3);
+StructuredBuffer<VertexAttributes>    vertexAttributes[MAX_MODEL_DEFINITIONS] : register(t1, space4);
 
 RWTexture2D<float4> colorUav : register(u0, space0);
 
@@ -205,7 +206,7 @@ void ColorPass(uint3 pos : SV_DispatchThreadID)
 
         uint3 i = indices[modelIndex].Load(tri);
 
-        float3 bary = GetBarycentric(modelIndex, i, modelToView, viewPos);
+        float3 bary = GetBarycentric(modelIndex, i, modelToView, viewPos / totalWeight);
 
         float3 normal0 = mul(vertexAttributes[modelIndex][i[0]].Normal, (float3x3)modelToView);
         float3 normal1 = mul(vertexAttributes[modelIndex][i[1]].Normal, (float3x3)modelToView);
