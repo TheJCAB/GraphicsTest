@@ -530,6 +530,21 @@ ComPtr<ID3D12Resource> CreateUploadBuffer(ComRef<ID3D12Device> const device, UIN
     return uploadBuffer;
 }
 
+ComPtr<ID3D12Resource> CreateGpuBuffer(ComRef<ID3D12Device> const device, UINT const size)
+{
+    ComPtr<ID3D12Resource> uploadBuffer;
+    BufferDesc const bufferDesc{ size, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS };
+    ThrowIfFailed(device->CreateCommittedResource(
+        &StaticBufferHeapProperties,
+        D3D12_HEAP_FLAG_NONE,
+        &bufferDesc,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        nullptr,
+        IID_PPV_ARGS(&uploadBuffer)));
+
+    return uploadBuffer;
+}
+
 ComPtr<ID3D12Resource> AssetUploader::CreateStaticBuffer(
     UINT                       const size,
     D3D12_RESOURCE_STATES      const initialState,
@@ -546,16 +561,9 @@ ComPtr<ID3D12Resource> AssetUploader::CreateStaticBuffer(
     dataFill(p);
     uploadBuffer->Unmap(0, nullptr);
 
-    D3D12_HEAP_PROPERTIES const heap{
-        .Type                 = D3D12_HEAP_TYPE_DEFAULT,
-        .CPUPageProperty      = D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
-        .MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN,
-        .CreationNodeMask     = 1,
-        .VisibleNodeMask      = 1,
-    };
     BufferDesc const bufferDesc{ size };
     ThrowIfFailed(m_device->CreateCommittedResource(
-        &heap,
+        &StaticBufferHeapProperties,
         D3D12_HEAP_FLAG_NONE,
         &bufferDesc,
         D3D12_RESOURCE_STATE_COPY_DEST,

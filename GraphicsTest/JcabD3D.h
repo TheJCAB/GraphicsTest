@@ -164,8 +164,8 @@ struct RenderDevice
 
 void ExecuteCommandList(ComRef<ID3D12CommandQueue>, ComRef<ID3D12GraphicsCommandList>);
 
-ComPtr<ID3D12Resource> CreateUploadBuffer(ComRef<ID3D12Device>, UINT size);
-
+ComPtr<ID3D12Resource> CreateUploadBuffer(ComRef<ID3D12Device>, UINT size); // CPU-mapped, usable to render or to upload data.
+ComPtr<ID3D12Resource> CreateGpuBuffer   (ComRef<ID3D12Device>, UINT size); // UAV-ready buffer for GPU use only.
 
 
 
@@ -219,6 +219,13 @@ constexpr D3D12_HEAP_PROPERTIES UploadHeapProperties
     .CreationNodeMask     = 1,
     .VisibleNodeMask      = 1,
 };
+    D3D12_HEAP_PROPERTIES const heap{
+        .Type                 = D3D12_HEAP_TYPE_DEFAULT,
+        .CPUPageProperty      = D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+        .MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN,
+        .CreationNodeMask     = 1,
+        .VisibleNodeMask      = 1,
+    };
 
 constexpr D3D12_HEAP_PROPERTIES StaticBufferHeapProperties
 {
@@ -231,7 +238,7 @@ constexpr D3D12_HEAP_PROPERTIES StaticBufferHeapProperties
 
 struct BufferDesc : D3D12_RESOURCE_DESC
 {
-    BufferDesc(UINT const size)
+    BufferDesc(UINT const size, D3D12_RESOURCE_FLAGS const flags = D3D12_RESOURCE_FLAG_NONE)
         : D3D12_RESOURCE_DESC
           {
             .Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER,
@@ -243,7 +250,7 @@ struct BufferDesc : D3D12_RESOURCE_DESC
             .Format           = DXGI_FORMAT_UNKNOWN,
             .SampleDesc       { .Count = 1, .Quality = 0 },
             .Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
-            .Flags            = D3D12_RESOURCE_FLAG_NONE,
+            .Flags            = flags,
           }
     {}
 };

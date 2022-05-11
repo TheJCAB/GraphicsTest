@@ -1,13 +1,3 @@
-//*********************************************************
-//
-// Copyright (c) Microsoft. All rights reserved.
-// This code is licensed under the MIT License (MIT).
-// THIS CODE IS PROVIDED *AS IS* WITHOUT WARRANTY OF
-// ANY KIND, EITHER EXPRESS OR IMPLIED, INCLUDING ANY
-// IMPLIED WARRANTIES OF FITNESS FOR A PARTICULAR
-// PURPOSE, MERCHANTABILITY, OR NON-INFRINGEMENT.
-//
-//*********************************************************
 
 // Shared with the shader.
 #define MAX_MODEL_DEFINITIONS    100
@@ -105,19 +95,28 @@ float GetDepth(uint2 pos, uint s)
     return depthMap.sample[GetVisibilitySample(s)][GetVisibilityPos(pos, s)];
 }
 
+static const float2 InverseProjectionScale = float2(    2.0f / 720.0f, -2.0f / 720.0f);
+static const float2 InverseProjectionBias  = float2(-1280.0f / 720.0f,  1.0f);
+
+static const float2 ProjectionScale = float2(  720.0f / 2.0f, -720.0f / 2.0f);
+static const float2 ProjectionBias  = float2( 1280.0f / 2.0f,  720.0f / 2.0f);
+
 float3 GetSampleViewPos(uint2 pos, int s)
 {
-    float depth = 0.0001f / GetDepth(pos, s);
+    float depth = -0.0001f / GetDepth(pos, s);
     float2 spos = GetVisibilityPos(pos, s) + 0.5 + visibilityMap.GetSamplePosition(GetVisibilitySample(s));
-    float2 normPos = float2(
-               spos.x * (2 / 1280.0f) - 1.0f,
-        1.0f - spos.y * (2 /  720.0f)
-    );
-    return depth * float3(
-        normPos.x * (1280.0 / 720.0f),
-        normPos.y                    ,
-        -1
-    );
+    return float3((spos * InverseProjectionScale + InverseProjectionBias) * depth, depth);
+//    float depth = 0.0001f / GetDepth(pos, s);
+//    float2 spos = GetVisibilityPos(pos, s) + 0.5 + visibilityMap.GetSamplePosition(GetVisibilitySample(s));
+//    float2 normPos = float2(
+//               spos.x * (2 / 1280.0f) - 1.0f,
+//        1.0f - spos.y * (2 /  720.0f)
+//    );
+//    return depth * float3(
+//        normPos.x * (1280.0 / 720.0f),
+//        normPos.y                    ,
+//        -1
+//    );
 }
 
 float3 GetBarycentric(uint modelIndex, uint3 indices, float4x4 modelToView, float3 viewPos)
@@ -138,13 +137,161 @@ float3 GetBarycentric(uint modelIndex, uint3 indices, float4x4 modelToView, floa
     return bary / dot(bary, 1);
 }
 
+struct ComputableSample
+{
+    uint  ScreenPos;  // 32 bits
+    uint  Visibility; // 32 bits instance + tri
+    uint  Weights;    // UNORM  4 * 5 = 20 bits compressed
+    float Depth;      // As is, 32 bits
+};
+// 128 bits compressed.
+
+RWStructuredBuffer<ComputableSample> computableBuffer : register(u1, space0);
+
+groupshared uint2 visibilityListGS[(32 / PSamplesX) * (16 / PSamplesY)][8 * PSamples];
+#define visibilityList visibilityListGS[tindex]
+
+[numthreads(32 / PSamplesX, 16 / PSamplesY, 1)]
+void ComputableGatherPass(uint3 pos : SV_DispatchThreadID, uint tindex : SV_GroupIndex)
+{
+    //uint2 visibilityList[8 * PSamples];
+    {
+        uint sampleBit = 1;
+        for (uint s = 0; s != 8 * PSamples; ++s, sampleBit <<= 1)
+        {
+            uint v = GetVisibility(pos.xy, s);
+            visibilityList[s] = uint2(v, sampleBit);
+        }
+    }
+
+    uint numSamples = 8 * PSamples;
+    for (;;)
+    {
+        uint moves = 0;
+        uint src  = 0;
+        for (uint next = 1; next < numSamples; ++next)
+        {
+            if (visibilityList[src].x < visibilityList[next].x)
+            {
+                uint2 tmp = visibilityList[src];
+                visibilityList[src] = visibilityList[next];
+                src += 1;
+                visibilityList[src + 1] = tmp;
+                moves = 1;
+            }
+            else if (visibilityList[src].x == visibilityList[next].x)
+            {
+                visibilityList[src].y |= visibilityList[next].y;
+                moves = 1;
+            }
+            else
+            {
+                src += 1;
+                visibilityList[src] = visibilityList[next];
+            }
+        }
+        numSamples = visibilityList[src].x == 0 ? src : src + 1;
+        if (moves == 0)
+        {
+            break;
+        }
+    }
+    for (;;)
+    {
+        uint moves = 0;
+        for (uint s = 1; s < numSamples; ++s)
+        {
+            if (countbits(visibilityList[s - 1].y) < countbits(visibilityList[s].y))
+            {
+                uint2 tmp = visibilityList[s - 1];
+                visibilityList[s - 1] = visibilityList[s];
+                visibilityList[s] = tmp;
+                moves = 1;
+            }
+        }
+        if (moves == 0)
+        {
+            break;
+        }
+    }
+
+    uint i = 0;
+    for (; i < PSamples && i < numSamples; ++i)
+    {
+        uint v = visibilityList[i].x;
+        if (v == 0)
+        {
+            break;
+        }
+
+        float3 viewPos = float3(0, 0, 0);
+        float weight[PSamplesX][PSamplesY];
+        {
+            [unroll] for (int x = 0; x < PSamplesX; ++x)
+                [unroll] for (int y = 0; y < PSamplesY; ++y)
+                    weight[x][y] = 0;
+        }
+        uint s = 0;
+        uint mask = visibilityList[i].y;
+        while (mask != 0)
+        {
+            while ((mask & 1) == 0)
+            {
+                ++s;
+                mask >>= 1;
+            }
+
+            uint2 samplePixel = GetSamplePixel(s);
+            viewPos += GetSampleViewPos(pos.xy, s);
+            weight[samplePixel.x][samplePixel.y] += 1;
+            ++s;
+            mask >>= 1;
+        }
+
+        // screen coordinates with 4 bits of fractional: uint2 normalizedScreenPos = floor(((viewPos.xy / viewPos.z) * ProjectionScale + ProjectionBias) * 16),
+        uint2 normalizedScreenPos = floor((viewPos.xy / viewPos.z + 1) * 32767.5f); // Normalized screen coordinates (resolution independent)
+
+        uint intWeight00 = floor(weight[0][0]);
+        uint intWeight10 = floor(weight[1][0]);
+        uint intWeight01 = floor(weight[0][1]);
+        uint intWeight11 = floor(weight[1][1]);
+
+        ComputableSample result;
+        result.ScreenPos  = normalizedScreenPos.x | (normalizedScreenPos.y << 16);
+        result.Visibility = v;
+        result.Weights    = intWeight00 | (intWeight10 << 8) | (intWeight01 << 16) | (intWeight11 << 24);
+        result.Depth      = viewPos.z;
+
+        computableBuffer[(pos.x + pos.y * (1280 / PSamplesX)) * PSamples + i] = result;
+    }
+
+    for (; i < PSamples; ++i)
+    {
+        //ComputableSample result = { 0 };
+
+        computableBuffer[(pos.x + pos.y * (1280 / PSamplesX)) * PSamples + i].Visibility = 0;
+    }
+}
+
+struct GBufferSample
+{
+    uint2  ScreenPos;       // 24 bits
+    float3 ViewPos;         // As is, or... say 48-64 bits (plus instance index for constants)
+    float2 Barycentric;     // UNORM, 32 bits compressed, possibly less
+    float3 Normal;          // UNORM, 2 * 15 + 2 = 32 bits compressed
+    float4 Weight;          // UNORM  4 * 5      = 20 bits compressed
+};
+// Say, 172 bits compressed.
+
 [numthreads(64 / PSamplesX, 16 / PSamplesY, 1)]
 void ColorPass(uint3 pos : SV_DispatchThreadID)
 {
     float4 color[PSamplesX][PSamplesY];
-    [unroll] for (int x = 0; x < PSamplesX; ++x)
-        [unroll] for (int y = 0; y < PSamplesY; ++y)
-            color[x][y] = 0;
+    {
+        [unroll] for (int x = 0; x < PSamplesX; ++x)
+            [unroll] for (int y = 0; y < PSamplesY; ++y)
+                color[x][y] = 0;
+    }
 
     uint mask = 0xFFFFFFFF >> (32 - (8 * PSamples));
 
@@ -174,9 +321,11 @@ void ColorPass(uint3 pos : SV_DispatchThreadID)
         float3 viewPos = GetSampleViewPos(pos.xy, s);
         float  totalWeight = 1;
         float  weight[PSamplesX][PSamplesY];
-        [unroll] for (int x = 0; x < PSamplesX; ++x)
-            [unroll] for (int y = 0; y < PSamplesY; ++y)
-                weight[x][y] = 0;
+        {
+            [unroll] for (int x = 0; x < PSamplesX; ++x)
+                [unroll] for (int y = 0; y < PSamplesY; ++y)
+                    weight[x][y] = 0;
+        }
         weight[samplePixel.x][samplePixel.y] = 1;
 
         uint s2mask = 2;
@@ -214,11 +363,13 @@ void ColorPass(uint3 pos : SV_DispatchThreadID)
 
         float3 normal = normalize(normal0 * bary[0] + normal1 * bary[1] + normal2 * bary[2]);
 
-        [unroll] for (int x = 0; x < PSamplesX; ++x)
-            [unroll] for (int y = 0; y < PSamplesY; ++y)
-            {
-                color[x][y] += weight[x][y] * float4(float3(1, 1, 1) * dot(normal, normalize(float3(1, 1, 1))), 1);
-            }
+        {
+            [unroll] for (int x = 0; x < PSamplesX; ++x)
+                [unroll] for (int y = 0; y < PSamplesY; ++y)
+                {
+                    color[x][y] += weight[x][y] * float4(float3(1, 1, 1) * dot(normal, normalize(float3(1, 1, 1))), 1);
+                }
+        }
     }
 
     [unroll] for (int x = 0; x < PSamplesX; ++x)
