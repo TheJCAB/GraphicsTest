@@ -11,6 +11,8 @@
 #include <map>
 #include <filesystem>
 
+bool g_animate = false;
+
 // Shared with the shader.
 #define MAX_MODEL_DEFINITIONS     100
 #define MAX_INSTANCE_DEFINITIONS 1000
@@ -332,9 +334,12 @@ void UpdateModelInstance(RenderDevice const& renderDevice, InstanceManager& inst
 {
     auto& instance = instanceManager.GetInstance(instanceId);
 
-    instance.Yaw   += 0x50;
-    instance.Pitch += 0x77;
-    instance.Roll  += 0x23;
+    if (g_animate)
+    {
+        instance.Yaw   += 0x50;
+        instance.Pitch += 0x77;
+        instance.Roll  += 0x23;
+    }
 
     XMMATRIX const modelMatrix = XMMatrixRotationRollPitchYaw(instance.Pitch * (2.0f * XM_PI / 65536.0f), instance.Yaw * (2.0f * XM_PI / 65536.0f), instance.Roll * (2.0f * XM_PI / 65536.0));
     XMMATRIX const translation = XMMatrixTranslation(4, 0, 0);
@@ -348,11 +353,14 @@ void UpdateStaticModelInstance(RenderDevice const& renderDevice, InstanceManager
 {
     auto& instance = instanceManager.GetInstance(instanceId);
 
-    instance.Yaw += 50;
+    if (g_animate)
+    {
+        instance.Yaw += 5;
+    }
 
     XMMATRIX const modelMatrix = XMMatrixRotationRollPitchYaw(instance.Pitch * (2.0f * XM_PI / 65536.0f), instance.Yaw * (2.0f * XM_PI / 65536.0f), instance.Roll * (2.0f * XM_PI / 65536.0));
 
-    XMMATRIX const scale = XMMatrixScaling(100, 100, 100);
+    XMMATRIX const scale = XMMatrixScaling(1, 1, 1); //XMMatrixScaling(100, 100, 100);
 
     auto& attributes = instanceManager.GetCurrentFrameInstanceAttributes(renderDevice, instanceId);
     XMStoreFloat4x4(&attributes.View      , XMMatrixTranspose(scale * modelMatrix * View    ));
@@ -496,6 +504,11 @@ struct ComputableGatherPass
         uint32_t Weights;    // UNORM  4 * 5 = 20 bits compressed
         float    Depth;      // As is, 32 bits
     };
+    struct ComputableQuad
+    {
+        uint32_t         SampleCount;  // 32 bits
+        ComputableSample SampleList[8];
+    };
     ComPtr<ID3D12Resource> ComputableSampleBuffer;
     UINT                   ComputableSampleBufferUav;
 
@@ -528,14 +541,14 @@ ComputableGatherPass::ComputableGatherPass(RenderDevice& renderDevice)
         }
     );
 
-    ComputableSampleBuffer = CreateGpuBuffer(renderDevice.device, 1280 * 720 * sizeof(ComputableSample));
+    ComputableSampleBuffer = CreateGpuBuffer(renderDevice.device, (1280 * 720 / 4) * sizeof(ComputableQuad));
     ComputableSampleBufferUav = renderDevice.AllocateUavDescriptor(ComputableSampleBuffer,
         {
             .Format        = DXGI_FORMAT_UNKNOWN,
             .ViewDimension = D3D12_UAV_DIMENSION_BUFFER,
             .Buffer{
-                .NumElements = 1280 * 720,
-                .StructureByteStride = sizeof(ComputableSample),
+                .NumElements = 1280 * 720 / 4,
+                .StructureByteStride = sizeof(ComputableQuad),
             },
         }
     );
@@ -578,7 +591,7 @@ struct ColorPass
 
     ColorPass(RenderDevice& renderDevice);
 
-    void Render(RenderDevice const&, VisibilityPass const&, ModelManager const&, InstanceManager const&) const;
+    void Render(RenderDevice const&, VisibilityPass const&, ComputableGatherPass const&, ModelManager const&, InstanceManager const&) const;
 };
 
 ColorPass::ColorPass(RenderDevice& renderDevice)
@@ -590,6 +603,7 @@ ColorPass::ColorPass(RenderDevice& renderDevice)
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, 1,                     0>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<2, 1,                     0>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<0, 1,                     0>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<1, 1,                     0>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS, 1>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS, 2>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS, 3>>,
@@ -619,7 +633,7 @@ ColorPass::ColorPass(RenderDevice& renderDevice)
     }
 }
 
-void ColorPass::Render(RenderDevice const& renderDevice, VisibilityPass const& visibilityPass, ModelManager const& modelManager, InstanceManager const& instanceManager) const
+void ColorPass::Render(RenderDevice const& renderDevice, VisibilityPass const& visibilityPass, ComputableGatherPass const& computableGatherPass, ModelManager const& modelManager, InstanceManager const& instanceManager) const
 {
     TransitionResource(renderDevice.commandList, ColorBuffer.Resource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
@@ -637,11 +651,12 @@ void ColorPass::Render(RenderDevice const& renderDevice, VisibilityPass const& v
     renderDevice.commandList->SetComputeRootDescriptorTable   (2, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(visibilityPass.VisibilityBuffer.SrvDescriptorIndex));
     renderDevice.commandList->SetComputeRootDescriptorTable   (3, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(visibilityPass.DepthBuffer     .SrvDescriptorIndex));
     renderDevice.commandList->SetComputeRootDescriptorTable   (4, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(ColorBufferUav));
+    renderDevice.commandList->SetComputeRootDescriptorTable   (5, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(computableGatherPass.ComputableSampleBufferUav));
 
-    renderDevice.commandList->SetComputeRootDescriptorTable(5, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetTriangleIndicesDescriptorTable   ()));
-    renderDevice.commandList->SetComputeRootDescriptorTable(6, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetTriangleParametersDescriptorTable()));
-    renderDevice.commandList->SetComputeRootDescriptorTable(7, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetVertexPositionsDescriptorTable   ()));
-    renderDevice.commandList->SetComputeRootDescriptorTable(8, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetVertexAttributesDescriptorTable  ()));
+    renderDevice.commandList->SetComputeRootDescriptorTable(6, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetTriangleIndicesDescriptorTable   ()));
+    renderDevice.commandList->SetComputeRootDescriptorTable(7, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetTriangleParametersDescriptorTable()));
+    renderDevice.commandList->SetComputeRootDescriptorTable(8, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetVertexPositionsDescriptorTable   ()));
+    renderDevice.commandList->SetComputeRootDescriptorTable(9, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetVertexAttributesDescriptorTable  ()));
 
     renderDevice.commandList->Dispatch(1280 / 64, 720 / 16, 1);
 }
@@ -871,8 +886,8 @@ ObjModel LoadObjModel(AssetUploader& uploader, RenderDevice& renderDevice)
 {
     ObjModel model;
     
-    auto const f = fopen(R"(X:\TEMP\MaryRoseTankard_100kMesh.obj)", "r");
-    //auto const f = fopen(R"(C:\Users\jcab\Downloads\ameise\source\Ameise_C\Ameise_C.obj)", "r");
+    //auto const f = fopen(R"(X:\TEMP\MaryRoseTankard_100kMesh.obj)", "r");
+    auto const f = fopen(R"(C:\Users\jcab\Downloads\ameise\source\Ameise_C\Ameise_C.obj)", "r");
     while (!feof(f))
     {
         std::array<char, 2048> buffer;
@@ -1156,7 +1171,7 @@ void RenderFrame(RenderDevice& renderDevice, Assets const& assets)
 
     assets.computableGatherPass->Render(renderDevice, *assets.visibilityPass, *assets.modelManager, *assets.instanceManager);
 
-    assets.colorPass->Render(renderDevice, *assets.visibilityPass, *assets.modelManager, *assets.instanceManager);
+    assets.colorPass->Render(renderDevice, *assets.visibilityPass, *assets.computableGatherPass, *assets.modelManager, *assets.instanceManager);
 
     assets.postprocessPass->Render(renderDevice, *assets.visibilityPass, *assets.colorPass);
 
@@ -1281,6 +1296,12 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPara
         return 0;
 
     case WM_KEYDOWN:
+        switch (static_cast<UINT8>(wParam))
+        {
+        case VK_SPACE:
+            g_animate = !g_animate;
+            break;
+        }
         // OnKeyDown(static_cast<UINT8>(wParam));
         return 0;
 

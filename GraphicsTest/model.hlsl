@@ -95,28 +95,28 @@ float GetDepth(uint2 pos, uint s)
     return depthMap.sample[GetVisibilitySample(s)][GetVisibilityPos(pos, s)];
 }
 
+// ViewPos.xy / z projected into [0..1280, 0..720] screen space
+static const float2 ProjectionScale = float2(  720.0f / 2.0f, -720.0f / 2.0f);
+static const float2 ProjectionBias  = float2( 1280.0f / 2.0f,  720.0f / 2.0f);
+
 static const float2 InverseProjectionScale = float2(    2.0f / 720.0f, -2.0f / 720.0f);
 static const float2 InverseProjectionBias  = float2(-1280.0f / 720.0f,  1.0f);
 
-static const float2 ProjectionScale = float2(  720.0f / 2.0f, -720.0f / 2.0f);
-static const float2 ProjectionBias  = float2( 1280.0f / 2.0f,  720.0f / 2.0f);
+// ViewPos.xy / z projected into [0..1, 0..1] normalized space
+static const float2 NormalizedProjectionScale = float2( 720.0f / (1280.0f * 2.0f), -1.0f / 2.0f);
+static const float2 NormalizedProjectionBias  = float2( 1.0f / 2.0f,  1.0f / 2.0f);
+
+static const float2 InverseNormalizedProjectionScale = float2( (1280.0f * 2.0f) / 720.0f, -2.0f);
+static const float2 InverseNormalizedProjectionBias  = float2(-1280.0f          / 720.0f,  1.0f);
+
+static const float2 InverseAspectRatio = float2(720.0f / 1280.0f, -1.0f);
+static const float2 AspectRatio        = float2(1280.0f / 720.0f, -1.0f);
 
 float3 GetSampleViewPos(uint2 pos, int s)
 {
     float depth = -0.0001f / GetDepth(pos, s);
     float2 spos = GetVisibilityPos(pos, s) + 0.5 + visibilityMap.GetSamplePosition(GetVisibilitySample(s));
     return float3((spos * InverseProjectionScale + InverseProjectionBias) * depth, depth);
-//    float depth = 0.0001f / GetDepth(pos, s);
-//    float2 spos = GetVisibilityPos(pos, s) + 0.5 + visibilityMap.GetSamplePosition(GetVisibilitySample(s));
-//    float2 normPos = float2(
-//               spos.x * (2 / 1280.0f) - 1.0f,
-//        1.0f - spos.y * (2 /  720.0f)
-//    );
-//    return depth * float3(
-//        normPos.x * (1280.0 / 720.0f),
-//        normPos.y                    ,
-//        -1
-//    );
 }
 
 float3 GetBarycentric(uint modelIndex, uint3 indices, float4x4 modelToView, float3 viewPos)
@@ -146,7 +146,13 @@ struct ComputableSample
 };
 // 128 bits compressed.
 
-RWStructuredBuffer<ComputableSample> computableBuffer : register(u1, space0);
+struct ComputableQuad
+{
+    uint             SampleCount;
+    ComputableSample SampleList[8];
+};
+
+RWStructuredBuffer<ComputableQuad> computableBuffer : register(u1, space0);
 
 groupshared uint2 visibilityListGS[(32 / PSamplesX) * (16 / PSamplesY)][8 * PSamples];
 #define visibilityList visibilityListGS[tindex]
@@ -155,144 +161,239 @@ groupshared uint2 visibilityListGS[(32 / PSamplesX) * (16 / PSamplesY)][8 * PSam
 void ComputableGatherPass(uint3 pos : SV_DispatchThreadID, uint tindex : SV_GroupIndex)
 {
     //uint2 visibilityList[8 * PSamples];
+    uint numSamples = 0;
     {
         uint sampleBit = 1;
         for (uint s = 0; s != 8 * PSamples; ++s, sampleBit <<= 1)
         {
             uint v = GetVisibility(pos.xy, s);
-            visibilityList[s] = uint2(v, sampleBit);
-        }
-    }
-
-    uint numSamples = 8 * PSamples;
-    for (;;)
-    {
-        uint moves = 0;
-        uint src  = 0;
-        for (uint next = 1; next < numSamples; ++next)
-        {
-            if (visibilityList[src].x < visibilityList[next].x)
+            uint i = 0;
+            for (; i < numSamples; ++i)
             {
-                uint2 tmp = visibilityList[src];
-                visibilityList[src] = visibilityList[next];
-                src += 1;
-                visibilityList[src + 1] = tmp;
-                moves = 1;
+                if (visibilityList[i].x == v)
+                {
+                    visibilityList[i].y |= sampleBit;
+                    break;
+                }
             }
-            else if (visibilityList[src].x == visibilityList[next].x)
+            if (i == numSamples)
             {
-                visibilityList[src].y |= visibilityList[next].y;
-                moves = 1;
+                visibilityList[i] = uint2(v, sampleBit);
+                ++numSamples;
             }
-            else
-            {
-                src += 1;
-                visibilityList[src] = visibilityList[next];
-            }
-        }
-        numSamples = visibilityList[src].x == 0 ? src : src + 1;
-        if (moves == 0)
-        {
-            break;
-        }
-    }
-    for (;;)
-    {
-        uint moves = 0;
-        for (uint s = 1; s < numSamples; ++s)
-        {
-            if (countbits(visibilityList[s - 1].y) < countbits(visibilityList[s].y))
-            {
-                uint2 tmp = visibilityList[s - 1];
-                visibilityList[s - 1] = visibilityList[s];
-                visibilityList[s] = tmp;
-                moves = 1;
-            }
-        }
-        if (moves == 0)
-        {
-            break;
         }
     }
 
     uint i = 0;
-    for (; i < PSamples && i < numSamples; ++i)
-    {
-        uint v = visibilityList[i].x;
-        if (v == 0)
-        {
-            break;
-        }
 
-        float3 viewPos = float3(0, 0, 0);
-        float weight[PSamplesX][PSamplesY];
+    // Pick the top samples
+    uint maxSamples = 8;
+    if (numSamples > maxSamples)
+    {
+        uint4 samplesLeft = uint4(8, 8, 8, 8);
+        for (i = 0; i < maxSamples; ++i)
+        {
+            uint4 foundBits = uint4(
+                countbits(visibilityList[i].y & 0xFF),
+                countbits(visibilityList[i].y & 0xFF00),
+                countbits(visibilityList[i].y & 0xFF0000),
+                countbits(visibilityList[i].y & 0xFF000000)
+            );
+            uint foundBitsCount = dot(samplesLeft, foundBits);
+
+            for (uint s = i + 1; s < numSamples; ++s)
+            {
+                uint4 sBits = uint4(
+                    countbits(visibilityList[s].y & 0xFF),
+                    countbits(visibilityList[s].y & 0xFF00),
+                    countbits(visibilityList[s].y & 0xFF0000),
+                    countbits(visibilityList[s].y & 0xFF000000)
+                );
+                uint sBitsCount = dot(samplesLeft, sBits);
+                if (foundBitsCount < sBitsCount)
+                {
+                    uint2 tmp = visibilityList[i];
+                    visibilityList[i] = visibilityList[s];
+                    visibilityList[s] = tmp;
+                    foundBits = sBits;
+                    foundBitsCount = sBitsCount;
+                }
+            }
+            samplesLeft -= foundBits;
+        }
+        numSamples = maxSamples;
+    }
+
+    uint computableIndex = pos.x + pos.y * (1280 / PSamplesX);
+
+    for (i = 0; i < numSamples; ++i)
+    {
+        ComputableSample result;
+
+        uint weight[PSamplesX][PSamplesY];
         {
             [unroll] for (int x = 0; x < PSamplesX; ++x)
                 [unroll] for (int y = 0; y < PSamplesY; ++y)
                     weight[x][y] = 0;
         }
-        uint s = 0;
+
+        uint v    = visibilityList[i].x;
         uint mask = visibilityList[i].y;
-        while (mask != 0)
+        if (v == 0)
         {
-            while ((mask & 1) == 0)
+            result.ScreenPos = 0; // TODO: calculate from pos.xy
+            result.Depth     = 1e20;
+
+            weight[0][0] = countbits(mask & 0xFF);
+            weight[1][0] = countbits(mask & 0xFF00);
+            weight[0][1] = countbits(mask & 0xFF0000);
+            weight[1][1] = countbits(mask & 0xFF000000);
+        }
+        else
+        {
+            float3 viewPos = float3(0, 0, 0);
+            uint s = 0;
+            while (mask != 0)
             {
+                while ((mask & 1) == 0)
+                {
+                    ++s;
+                    mask >>= 1;
+                }
+
+                uint2 samplePixel = GetSamplePixel(s);
+                viewPos += GetSampleViewPos(pos.xy, s);
+                weight[samplePixel.x][samplePixel.y] += 1;
                 ++s;
                 mask >>= 1;
             }
 
-            uint2 samplePixel = GetSamplePixel(s);
-            viewPos += GetSampleViewPos(pos.xy, s);
-            weight[samplePixel.x][samplePixel.y] += 1;
-            ++s;
-            mask >>= 1;
+            // screen coordinates with 4 bits of fractional: uint2 normalizedScreenPos = floor(((viewPos.xy / viewPos.z) * ProjectionScale + ProjectionBias) * 16),
+            uint2 normalizedScreenPos = floor(((viewPos.xy / viewPos.z) * NormalizedProjectionScale + NormalizedProjectionBias) * 65535.0f); // Normalized screen coordinates (resolution independent)
+
+            result.ScreenPos  = normalizedScreenPos.x | (normalizedScreenPos.y << 16);
+            result.Depth      = viewPos.z;
         }
 
-        // screen coordinates with 4 bits of fractional: uint2 normalizedScreenPos = floor(((viewPos.xy / viewPos.z) * ProjectionScale + ProjectionBias) * 16),
-        uint2 normalizedScreenPos = floor((viewPos.xy / viewPos.z + 1) * 32767.5f); // Normalized screen coordinates (resolution independent)
+        uint intWeight00 = weight[0][0];
+        uint intWeight10 = weight[1][0];
+        uint intWeight01 = weight[0][1];
+        uint intWeight11 = weight[1][1];
 
-        uint intWeight00 = floor(weight[0][0]);
-        uint intWeight10 = floor(weight[1][0]);
-        uint intWeight01 = floor(weight[0][1]);
-        uint intWeight11 = floor(weight[1][1]);
-
-        ComputableSample result;
-        result.ScreenPos  = normalizedScreenPos.x | (normalizedScreenPos.y << 16);
         result.Visibility = v;
         result.Weights    = intWeight00 | (intWeight10 << 8) | (intWeight01 << 16) | (intWeight11 << 24);
-        result.Depth      = viewPos.z;
 
-        computableBuffer[(pos.x + pos.y * (1280 / PSamplesX)) * PSamples + i] = result;
+        computableBuffer[computableIndex].SampleList[i] = result;
     }
 
-    for (; i < PSamples; ++i)
-    {
-        //ComputableSample result = { 0 };
+    computableBuffer[computableIndex].SampleCount = numSamples;
+}
 
-        computableBuffer[(pos.x + pos.y * (1280 / PSamplesX)) * PSamples + i].Visibility = 0;
-    }
+float3 DecodeViewPos(uint pos, float depth)
+{
+    float2 spos = ((float2)(uint2(pos, pos >> 16) & 0xFFFF) / 65535.5f) * InverseNormalizedProjectionScale + InverseNormalizedProjectionBias;
+    return float3(spos * depth, depth);
+}
+
+uint2 DecodeGroupPos(uint pos)
+{
+    uint2 npos = uint2(pos, pos >> 16) & 0xFFFF;
+    return npos * uint2(640, 360) / 0x10000;
+}
+
+uint4 DecodeWeights(uint encodedWeights)
+{
+    return uint4(encodedWeights, encodedWeights >> 8, encodedWeights >> 16, encodedWeights >> 24) & 0xFF;
 }
 
 struct GBufferSample
 {
-    uint2  ScreenPos;       // 24 bits
     float3 ViewPos;         // As is, or... say 48-64 bits (plus instance index for constants)
-    float2 Barycentric;     // UNORM, 32 bits compressed, possibly less
-    float3 Normal;          // UNORM, 2 * 15 + 2 = 32 bits compressed
-    float4 Weight;          // UNORM  4 * 5      = 20 bits compressed
+    float3 Barycentric;     // UNORM, 32 bits compressed, possibly less
+    float3 ViewNormal;      // UNORM, 2 * 15 + 2 = 32 bits compressed
+    //float4 Weight;          // UNORM  4 * 5      = 20 bits compressed
 };
 // Say, 172 bits compressed.
+
+GBufferSample GetGBufferSample(uint visibility, float3 viewPos)
+{
+    GBufferSample result;
+
+    uint     tri         = visibility & 0xFFFFF;
+    uint     instanceId  = (visibility >> 20) - 1;
+    uint     modelIndex  = instanceList[instanceId].ModelIndex;
+    float4x4 modelToView = instanceList[instanceId].View;
+
+    uint3 i = indices[modelIndex].Load(tri);
+
+    result.Barycentric = GetBarycentric(modelIndex, i, modelToView, viewPos);
+
+    float3 normal0 = vertexAttributes[modelIndex][i[0]].Normal;
+    float3 normal1 = vertexAttributes[modelIndex][i[1]].Normal;
+    float3 normal2 = vertexAttributes[modelIndex][i[2]].Normal;
+
+    result.ViewPos    = viewPos;
+    result.ViewNormal = mul(normalize(normal0 * result.Barycentric[0] + normal1 * result.Barycentric[1] + normal2 * result.Barycentric[2]), (float3x3)modelToView);
+
+    return result;
+}
+
+    //uint color = triangleParams[tri].Color;
+    //return float4(
+    //    ( color        & 0xFF) / 255.0f,
+    //    ((color >>  8) & 0xFF) / 255.0f,
+    //    ((color >> 16) & 0xFF) / 255.0f,
+    //    ((color >> 24) & 0xFF) / 255.0f);
+
 
 [numthreads(64 / PSamplesX, 16 / PSamplesY, 1)]
 void ColorPass(uint3 pos : SV_DispatchThreadID)
 {
-    float4 color[PSamplesX][PSamplesY];
+    float4x4 color = 0;
+
+    uint computableIndex = pos.x + pos.y * (1280 / PSamplesX);
+
+    uint numSamples = computableBuffer[computableIndex].SampleCount;
+
+    float4 totalWeights = 0;
+    [unroll(4)] for (uint k = 0; k < numSamples; ++k)
     {
-        [unroll] for (int x = 0; x < PSamplesX; ++x)
-            [unroll] for (int y = 0; y < PSamplesY; ++y)
-                color[x][y] = 0;
+        totalWeights += (float4)DecodeWeights(computableBuffer[computableIndex].SampleList[k].Weights);
     }
 
+    {
+        for (int i = 0; i < numSamples; ++i)
+        {
+            ComputableSample csample = computableBuffer[computableIndex].SampleList[i];
+            float4 weights = (float4)DecodeWeights(csample.Weights);// / totalWeights;
+            uint v = csample.Visibility;
+            if (v == 0)
+            {
+                color[0] += weights[0] * float4(0.3, 0, 0, 1);
+                color[1] += weights[1] * float4(0.3, 0, 0, 1);
+                color[2] += weights[2] * float4(0.3, 0, 0, 1);
+                color[3] += weights[3] * float4(0.3, 0, 0, 1);
+            }
+            else
+            {
+                float3 viewPos = DecodeViewPos(csample.ScreenPos, csample.Depth);
+
+                GBufferSample gSample = GetGBufferSample(v, viewPos);
+
+                color[0] += weights[0] * float4(float3(1, 1 /*totalWeights[0] / 8*/, 1) * dot(gSample.ViewNormal, normalize(float3(1, 1, 1))), 1);
+                color[1] += weights[1] * float4(float3(1, 1 /*totalWeights[1] / 8*/, 1) * dot(gSample.ViewNormal, normalize(float3(1, 1, 1))), 1);
+                color[2] += weights[2] * float4(float3(1, 1 /*totalWeights[2] / 8*/, 1) * dot(gSample.ViewNormal, normalize(float3(1, 1, 1))), 1);
+                color[3] += weights[3] * float4(float3(1, 1 /*totalWeights[3] / 8*/, 1) * dot(gSample.ViewNormal, normalize(float3(1, 1, 1))), 1);
+            }
+        }
+    }
+
+    //color[0] +=  * (totalWeights[0] - color[0].w);
+    //color[1] +=  * (totalWeights[1] - color[1].w);
+    //color[2] +=  * (totalWeights[2] - color[2].w);
+    //color[3] +=  * (totalWeights[3] - color[3].w);
+
+/*
     uint mask = 0xFFFFFFFF >> (32 - (8 * PSamples));
 
     for (int s = 0; mask != 0; ++s, mask >>= 1)
@@ -371,33 +472,15 @@ void ColorPass(uint3 pos : SV_DispatchThreadID)
                 }
         }
     }
+*/
 
-    [unroll] for (int x = 0; x < PSamplesX; ++x)
-        [unroll] for (int y = 0; y < PSamplesY; ++y)
-        {
-            if (color[x][y].w == 0)
-            {
-                colorUav[pos.xy * PSampleXY + uint2(x, y)] = float4(0.3, 0, 0, 1);
-            }
-            else
-            {
-                colorUav[pos.xy * PSampleXY + uint2(x, y)] = float4(color[x][y].xyz / color[x][y].w, 1);
-            }
-        }
+    uint2 spos = pos.xy; //DecodeGroupPos(computableBuffer[computableIndex].SampleList[0].ScreenPos);
+    float4 posColor = 1;//float4(spos.x == pos.x ? 1.0f: 0.5f, 1.0f, spos.y == pos.y ? 1.0f: 0.5f, 1.0f);
 
-    //uint color = triangleParams[tri].Color;
-    //return float4(
-    //    ( color        & 0xFF) / 255.0f,
-    //    ((color >>  8) & 0xFF) / 255.0f,
-    //    ((color >> 16) & 0xFF) / 255.0f,
-    //    ((color >> 24) & 0xFF) / 255.0f);
-
-    //return float4(
-    //    (tri & 1) ? 1 : 0,
-    //    (tri & 2) ? 1 : 0,
-    //    (tri & 4) ? 1 : 0,
-    //    1
-    //);
+    colorUav[spos.xy * PSampleXY + uint2(0, 0)] = posColor * float4(color[0].xyz / color[0].w, 1);
+    colorUav[spos.xy * PSampleXY + uint2(1, 0)] = posColor * float4(color[1].xyz / color[1].w, 1);
+    colorUav[spos.xy * PSampleXY + uint2(0, 1)] = posColor * float4(color[2].xyz / color[2].w, 1);
+    colorUav[spos.xy * PSampleXY + uint2(1, 1)] = posColor * float4(color[3].xyz / color[3].w, 1);
 }
 
 

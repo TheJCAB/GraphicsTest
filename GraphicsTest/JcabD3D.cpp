@@ -435,7 +435,7 @@ ComPtr<ID3DBlob> Compile(Shader const& shader)
     // Enable better shader debugging with the graphics debugging tools.
     auto const compileFlags = shader.Flags | D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
 #else
-    auto const compileFlags = shader.Flags;
+    auto const compileFlags = shader.Flags | D3DCOMPILE_DEBUG;
 #endif
     ComPtr<ID3DBlob> errors;
     auto const hr = D3DCompileFromFile(shader.pFilename, nullptr, nullptr, shader.pFunction, shader.pTarget, compileFlags, 0, &compiledShader, &errors);
