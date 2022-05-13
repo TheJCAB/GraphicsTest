@@ -492,6 +492,79 @@ CpuAccessibleBuffer<T>::CpuAccessibleBuffer(RenderDevice& renderDevice)
     ThrowIfFailed(Buffer->Map(0, &readRange, reinterpret_cast<void**>(&pData)));
 }
 
+struct MsaaGatherPass
+{
+    ComPtr<ID3D12RootSignature> RootSignature;
+    ComPtr<ID3D12PipelineState> PipelineState;
+
+    struct MsaaSample
+    {
+        uint32_t Visibility; // 32 bits instance + tri
+        uint32_t SampleMask; // UNORM  4 * 5 = 20 bits compressed
+    };
+    struct MsaaQuad
+    {
+        uint32_t   SampleCount;  // 32 bits
+        MsaaSample SampleList[4];
+    };
+    ComPtr<ID3D12Resource> MsaaSampleBuffer;
+    UINT                   MsaaSampleBufferUav;
+
+    MsaaGatherPass(RenderDevice& renderDevice);
+
+    void Render(RenderDevice const&, VisibilityPass const&, ModelManager const&, InstanceManager const&) const;
+};
+
+MsaaGatherPass::MsaaGatherPass(RenderDevice& renderDevice)
+{
+    // Create the rendering root signature.
+    RootSignature = renderDevice.CreateRootSignature<
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, 1,                     0>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<2, 1,                     0>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<2, 1,                     0>>,
+        Root::Flags<D3D12_ROOT_SIGNATURE_FLAG_NONE>
+    >();
+
+    // Create the pipeline state, which includes compiling and loading shaders.
+    PipelineState = renderDevice.Create(Compute::State
+        {
+            .RootSignature{ RootSignature },
+            .CS           = Compile(Shader{ L"model.hlsl", "MsaaGatherPass", "cs_5_1" }),
+        }
+    );
+
+    MsaaSampleBuffer = CreateGpuBuffer(renderDevice.device, (1280 * 720 / 4) * sizeof(MsaaQuad));
+    MsaaSampleBufferUav = renderDevice.AllocateUavDescriptor(MsaaSampleBuffer,
+        {
+            .Format        = DXGI_FORMAT_UNKNOWN,
+            .ViewDimension = D3D12_UAV_DIMENSION_BUFFER,
+            .Buffer{
+                .NumElements = 1280 * 720 / 4,
+                .StructureByteStride = sizeof(MsaaQuad),
+            },
+        }
+    );
+}
+
+void MsaaGatherPass::Render(RenderDevice const& renderDevice, VisibilityPass const& visibilityPass, ModelManager const& modelManager, InstanceManager const& instanceManager) const
+{
+    renderDevice.commandList->SetComputeRootSignature(RootSignature.Get());
+    renderDevice.commandList->SetPipelineState       (PipelineState.Get());
+
+    ID3D12DescriptorHeap* const heaps[]{ renderDevice.srvDescriptorHeap };
+    renderDevice.commandList->SetDescriptorHeaps(1, heaps);
+
+    renderDevice.commandList->SetComputeRootDescriptorTable   (0, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(visibilityPass.VisibilityBuffer.SrvDescriptorIndex));
+    renderDevice.commandList->SetComputeRootDescriptorTable   (1, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(visibilityPass.DepthBuffer     .SrvDescriptorIndex));
+    renderDevice.commandList->SetComputeRootDescriptorTable   (2, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(MsaaSampleBufferUav));
+
+    renderDevice.commandList->Dispatch(1280 / 32, 720 / 16, 1);
+}
+
+
+
+
+
 struct ComputableGatherPass
 {
     ComPtr<ID3D12RootSignature> RootSignature;
@@ -500,36 +573,28 @@ struct ComputableGatherPass
     struct ComputableSample
     {
         uint32_t ScreenPos;  // 32 bits
-        uint32_t Visibility; // 32 bits instance + tri
-        uint32_t Weights;    // UNORM  4 * 5 = 20 bits compressed
         float    Depth;      // As is, 32 bits
     };
     struct ComputableQuad
     {
-        uint32_t         SampleCount;  // 32 bits
-        ComputableSample SampleList[8];
+        ComputableSample SampleList[4];
     };
     ComPtr<ID3D12Resource> ComputableSampleBuffer;
     UINT                   ComputableSampleBufferUav;
 
     ComputableGatherPass(RenderDevice& renderDevice);
 
-    void Render(RenderDevice const&, VisibilityPass const&, ModelManager const&, InstanceManager const&) const;
+    void Render(RenderDevice const&, VisibilityPass const&, MsaaGatherPass const&, ModelManager const&, InstanceManager const&) const;
 };
 
 ComputableGatherPass::ComputableGatherPass(RenderDevice& renderDevice)
 {
     // Create the rendering root signature.
     RootSignature = renderDevice.CreateRootSignature<
-        //Root::Cbv<  D3D12_SHADER_VISIBILITY_ALL,                0,                        0 >,
-        //Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<0, 1,                     0>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, 1,                     0>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<2, 1,                     0>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<1, 1,                     0>>,
-        //Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS, 1>>,
-        //Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS, 2>>,
-        //Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS, 3>>,
-        //Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS, 4>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<2, 1,                     0>>,
         Root::Flags<D3D12_ROOT_SIGNATURE_FLAG_NONE>
     >();
 
@@ -554,7 +619,7 @@ ComputableGatherPass::ComputableGatherPass(RenderDevice& renderDevice)
     );
 }
 
-void ComputableGatherPass::Render(RenderDevice const& renderDevice, VisibilityPass const& visibilityPass, ModelManager const& modelManager, InstanceManager const& instanceManager) const
+void ComputableGatherPass::Render(RenderDevice const& renderDevice, VisibilityPass const& visibilityPass, MsaaGatherPass const& msaaGatherPass, ModelManager const& modelManager, InstanceManager const& instanceManager) const
 {
     renderDevice.commandList->SetComputeRootSignature(RootSignature.Get());
     renderDevice.commandList->SetPipelineState       (PipelineState.Get());
@@ -565,6 +630,7 @@ void ComputableGatherPass::Render(RenderDevice const& renderDevice, VisibilityPa
     renderDevice.commandList->SetComputeRootDescriptorTable   (0, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(visibilityPass.VisibilityBuffer.SrvDescriptorIndex));
     renderDevice.commandList->SetComputeRootDescriptorTable   (1, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(visibilityPass.DepthBuffer     .SrvDescriptorIndex));
     renderDevice.commandList->SetComputeRootDescriptorTable   (2, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(ComputableSampleBufferUav));
+    renderDevice.commandList->SetComputeRootDescriptorTable   (3, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(msaaGatherPass.MsaaSampleBufferUav));
 
     renderDevice.commandList->Dispatch(1280 / 32, 720 / 16, 1);
 }
@@ -591,7 +657,7 @@ struct ColorPass
 
     ColorPass(RenderDevice& renderDevice);
 
-    void Render(RenderDevice const&, VisibilityPass const&, ComputableGatherPass const&, ModelManager const&, InstanceManager const&) const;
+    void Render(RenderDevice const&, VisibilityPass const&, MsaaGatherPass const&, ComputableGatherPass const&, ModelManager const&, InstanceManager const&) const;
 };
 
 ColorPass::ColorPass(RenderDevice& renderDevice)
@@ -604,6 +670,7 @@ ColorPass::ColorPass(RenderDevice& renderDevice)
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<2, 1,                     0>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<0, 1,                     0>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<1, 1,                     0>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<2, 1,                     0>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS, 1>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS, 2>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS, 3>>,
@@ -633,7 +700,7 @@ ColorPass::ColorPass(RenderDevice& renderDevice)
     }
 }
 
-void ColorPass::Render(RenderDevice const& renderDevice, VisibilityPass const& visibilityPass, ComputableGatherPass const& computableGatherPass, ModelManager const& modelManager, InstanceManager const& instanceManager) const
+void ColorPass::Render(RenderDevice const& renderDevice, VisibilityPass const& visibilityPass, MsaaGatherPass const& msaaGatherPass, ComputableGatherPass const& computableGatherPass, ModelManager const& modelManager, InstanceManager const& instanceManager) const
 {
     TransitionResource(renderDevice.commandList, ColorBuffer.Resource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
@@ -652,11 +719,12 @@ void ColorPass::Render(RenderDevice const& renderDevice, VisibilityPass const& v
     renderDevice.commandList->SetComputeRootDescriptorTable   (3, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(visibilityPass.DepthBuffer     .SrvDescriptorIndex));
     renderDevice.commandList->SetComputeRootDescriptorTable   (4, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(ColorBufferUav));
     renderDevice.commandList->SetComputeRootDescriptorTable   (5, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(computableGatherPass.ComputableSampleBufferUav));
+    renderDevice.commandList->SetComputeRootDescriptorTable   (6, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(msaaGatherPass.MsaaSampleBufferUav));
 
-    renderDevice.commandList->SetComputeRootDescriptorTable(6, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetTriangleIndicesDescriptorTable   ()));
-    renderDevice.commandList->SetComputeRootDescriptorTable(7, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetTriangleParametersDescriptorTable()));
-    renderDevice.commandList->SetComputeRootDescriptorTable(8, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetVertexPositionsDescriptorTable   ()));
-    renderDevice.commandList->SetComputeRootDescriptorTable(9, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetVertexAttributesDescriptorTable  ()));
+    renderDevice.commandList->SetComputeRootDescriptorTable(7, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetTriangleIndicesDescriptorTable   ()));
+    renderDevice.commandList->SetComputeRootDescriptorTable(8, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetTriangleParametersDescriptorTable()));
+    renderDevice.commandList->SetComputeRootDescriptorTable(9, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetVertexPositionsDescriptorTable   ()));
+    renderDevice.commandList->SetComputeRootDescriptorTable(10, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager.GetVertexAttributesDescriptorTable  ()));
 
     renderDevice.commandList->Dispatch(1280 / 64, 720 / 16, 1);
 }
@@ -1081,6 +1149,7 @@ std::vector<Model> UploadObjModel(ObjModel const& model, AssetUploader& uploader
 struct Assets
 {
     std::shared_ptr<VisibilityPass>  visibilityPass;
+    std::shared_ptr<MsaaGatherPass>  msaaGatherPass;
     std::shared_ptr<ComputableGatherPass> computableGatherPass;
     std::shared_ptr<ColorPass>       colorPass;
     std::shared_ptr<PostprocessPass> postprocessPass;
@@ -1122,7 +1191,8 @@ Assets LoadAssets(RenderDevice& renderDevice)
     //}
 
     assets.visibilityPass   = std::make_shared<VisibilityPass> (renderDevice);
-    assets.computableGatherPass = std::make_shared<ComputableGatherPass>      (renderDevice);
+    assets.msaaGatherPass   = std::make_shared<MsaaGatherPass> (renderDevice);
+    assets.computableGatherPass = std::make_shared<ComputableGatherPass>(renderDevice);
     assets.colorPass        = std::make_shared<ColorPass>      (renderDevice);
     assets.postprocessPass  = std::make_shared<PostprocessPass>(renderDevice);
     assets.resolvePass      = std::make_shared<ResolvePass>    (renderDevice);
@@ -1169,9 +1239,11 @@ void RenderFrame(RenderDevice& renderDevice, Assets const& assets)
 
     assets.visibilityPass->Render(renderDevice, *assets.modelManager, *assets.instanceManager);
 
-    assets.computableGatherPass->Render(renderDevice, *assets.visibilityPass, *assets.modelManager, *assets.instanceManager);
+    assets.msaaGatherPass->Render(renderDevice, *assets.visibilityPass, *assets.modelManager, *assets.instanceManager);
 
-    assets.colorPass->Render(renderDevice, *assets.visibilityPass, *assets.computableGatherPass, *assets.modelManager, *assets.instanceManager);
+    assets.computableGatherPass->Render(renderDevice, *assets.visibilityPass, *assets.msaaGatherPass, *assets.modelManager, *assets.instanceManager);
+
+    assets.colorPass->Render(renderDevice, *assets.visibilityPass, *assets.msaaGatherPass, *assets.computableGatherPass, *assets.modelManager, *assets.instanceManager);
 
     assets.postprocessPass->Render(renderDevice, *assets.visibilityPass, *assets.colorPass);
 

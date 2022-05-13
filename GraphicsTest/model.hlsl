@@ -96,11 +96,11 @@ float GetDepth(uint2 pos, uint s)
 }
 
 // ViewPos.xy / z projected into [0..1280, 0..720] screen space
-static const float2 ProjectionScale = float2(  720.0f / 2.0f, -720.0f / 2.0f);
-static const float2 ProjectionBias  = float2( 1280.0f / 2.0f,  720.0f / 2.0f);
+static const float2 ProjectionScale = float2( -720.0f / 2.0f,  720.0f / 2.0f);
+static const float2 ProjectionBias  = float2( 1280.0f / 2.0f, -720.0f / 2.0f);
 
-static const float2 InverseProjectionScale = float2(    2.0f / 720.0f, -2.0f / 720.0f);
-static const float2 InverseProjectionBias  = float2(-1280.0f / 720.0f,  1.0f);
+static const float2 InverseProjectionScale = float2(   -2.0f / 720.0f,  2.0f / 720.0f);
+static const float2 InverseProjectionBias  = float2( 1280.0f / 720.0f, -1.0f);
 
 // ViewPos.xy / z projected into [0..1, 0..1] normalized space
 static const float2 NormalizedProjectionScale = float2( 720.0f / (1280.0f * 2.0f), -1.0f / 2.0f);
@@ -137,28 +137,38 @@ float3 GetBarycentric(uint modelIndex, uint3 indices, float4x4 modelToView, floa
     return bary / dot(bary, 1);
 }
 
+struct MsaaSample
+{
+    uint  Visibility; // 32 bits instance + tri
+    uint  SampleMask; // 32 bits (1 per sample)
+};
+
+struct MsaaQuad
+{
+    uint       SampleCount;
+    MsaaSample SampleList[4];
+};
+
 struct ComputableSample
 {
     uint  ScreenPos;  // 32 bits
-    uint  Visibility; // 32 bits instance + tri
-    uint  Weights;    // UNORM  4 * 5 = 20 bits compressed
     float Depth;      // As is, 32 bits
 };
 // 128 bits compressed.
 
 struct ComputableQuad
 {
-    uint             SampleCount;
-    ComputableSample SampleList[8];
+    ComputableSample SampleList[4];
 };
 
+RWStructuredBuffer<MsaaQuad> msaaBuffer : register(u2, space0);
 RWStructuredBuffer<ComputableQuad> computableBuffer : register(u1, space0);
 
 groupshared uint2 visibilityListGS[(32 / PSamplesX) * (16 / PSamplesY)][8 * PSamples];
 #define visibilityList visibilityListGS[tindex]
 
 [numthreads(32 / PSamplesX, 16 / PSamplesY, 1)]
-void ComputableGatherPass(uint3 pos : SV_DispatchThreadID, uint tindex : SV_GroupIndex)
+void MsaaGatherPass(uint3 pos : SV_DispatchThreadID, uint tindex : SV_GroupIndex)
 {
     //uint2 visibilityList[8 * PSamples];
     uint numSamples = 0;
@@ -187,7 +197,7 @@ void ComputableGatherPass(uint3 pos : SV_DispatchThreadID, uint tindex : SV_Grou
     uint i = 0;
 
     // Pick the top samples
-    uint maxSamples = 8;
+    uint maxSamples = 4;
     if (numSamples > maxSamples)
     {
         uint4 samplesLeft = uint4(8, 8, 8, 8);
@@ -224,35 +234,42 @@ void ComputableGatherPass(uint3 pos : SV_DispatchThreadID, uint tindex : SV_Grou
         numSamples = maxSamples;
     }
 
-    uint computableIndex = pos.x + pos.y * (1280 / PSamplesX);
+    uint quadIndex = pos.x + pos.y * (1280 / PSamplesX);
+
+    msaaBuffer[quadIndex].SampleCount = numSamples;
 
     for (i = 0; i < numSamples; ++i)
     {
+        MsaaSample result;
+        result.Visibility = visibilityList[i].x;
+        result.SampleMask = visibilityList[i].y;
+        msaaBuffer[quadIndex].SampleList[i] = result;
+    }
+}
+
+[numthreads(32 / PSamplesX, 16 / PSamplesY, 1)]
+void ComputableGatherPass(uint3 pos : SV_DispatchThreadID, uint tindex : SV_GroupIndex)
+{
+    uint quadIndex = pos.x + pos.y * (1280 / PSamplesX);
+
+    uint numSamples = msaaBuffer[quadIndex].SampleCount;
+
+    for (uint i = 0; i < numSamples; ++i)
+    {
         ComputableSample result;
 
-        uint weight[PSamplesX][PSamplesY];
-        {
-            [unroll] for (int x = 0; x < PSamplesX; ++x)
-                [unroll] for (int y = 0; y < PSamplesY; ++y)
-                    weight[x][y] = 0;
-        }
-
-        uint v    = visibilityList[i].x;
-        uint mask = visibilityList[i].y;
+        uint v    = msaaBuffer[quadIndex].SampleList[i].Visibility;
+        uint mask = msaaBuffer[quadIndex].SampleList[i].SampleMask;
         if (v == 0)
         {
             result.ScreenPos = 0; // TODO: calculate from pos.xy
             result.Depth     = 1e20;
-
-            weight[0][0] = countbits(mask & 0xFF);
-            weight[1][0] = countbits(mask & 0xFF00);
-            weight[0][1] = countbits(mask & 0xFF0000);
-            weight[1][1] = countbits(mask & 0xFF000000);
         }
         else
         {
             float3 viewPos = float3(0, 0, 0);
             uint s = 0;
+            float posWeight = 0;
             while (mask != 0)
             {
                 while ((mask & 1) == 0)
@@ -263,10 +280,12 @@ void ComputableGatherPass(uint3 pos : SV_DispatchThreadID, uint tindex : SV_Grou
 
                 uint2 samplePixel = GetSamplePixel(s);
                 viewPos += GetSampleViewPos(pos.xy, s);
-                weight[samplePixel.x][samplePixel.y] += 1;
+                posWeight += 1;
                 ++s;
                 mask >>= 1;
             }
+
+            viewPos /= posWeight;
 
             // screen coordinates with 4 bits of fractional: uint2 normalizedScreenPos = floor(((viewPos.xy / viewPos.z) * ProjectionScale + ProjectionBias) * 16),
             uint2 normalizedScreenPos = floor(((viewPos.xy / viewPos.z) * NormalizedProjectionScale + NormalizedProjectionBias) * 65535.0f); // Normalized screen coordinates (resolution independent)
@@ -275,18 +294,8 @@ void ComputableGatherPass(uint3 pos : SV_DispatchThreadID, uint tindex : SV_Grou
             result.Depth      = viewPos.z;
         }
 
-        uint intWeight00 = weight[0][0];
-        uint intWeight10 = weight[1][0];
-        uint intWeight01 = weight[0][1];
-        uint intWeight11 = weight[1][1];
-
-        result.Visibility = v;
-        result.Weights    = intWeight00 | (intWeight10 << 8) | (intWeight01 << 16) | (intWeight11 << 24);
-
-        computableBuffer[computableIndex].SampleList[i] = result;
+        computableBuffer[quadIndex].SampleList[i] = result;
     }
-
-    computableBuffer[computableIndex].SampleCount = numSamples;
 }
 
 float3 DecodeViewPos(uint pos, float depth)
@@ -301,9 +310,14 @@ uint2 DecodeGroupPos(uint pos)
     return npos * uint2(640, 360) / 0x10000;
 }
 
-uint4 DecodeWeights(uint encodedWeights)
+uint4 DecodeWeights(uint mask)
 {
-    return uint4(encodedWeights, encodedWeights >> 8, encodedWeights >> 16, encodedWeights >> 24) & 0xFF;
+    return uint4(
+        countbits(mask & 0xFF),
+        countbits(mask & 0xFF00),
+        countbits(mask & 0xFF0000),
+        countbits(mask & 0xFF000000)
+    );
 }
 
 struct GBufferSample
@@ -353,20 +367,22 @@ void ColorPass(uint3 pos : SV_DispatchThreadID)
 
     uint computableIndex = pos.x + pos.y * (1280 / PSamplesX);
 
-    uint numSamples = computableBuffer[computableIndex].SampleCount;
+    uint numSamples = msaaBuffer[computableIndex].SampleCount;
+
 
     float4 totalWeights = 0;
     [unroll(4)] for (uint k = 0; k < numSamples; ++k)
     {
-        totalWeights += (float4)DecodeWeights(computableBuffer[computableIndex].SampleList[k].Weights);
+        totalWeights += (float4)DecodeWeights(msaaBuffer[computableIndex].SampleList[k].SampleMask);
     }
 
     {
         for (int i = 0; i < numSamples; ++i)
         {
+            MsaaSample       msample = msaaBuffer      [computableIndex].SampleList[i];
             ComputableSample csample = computableBuffer[computableIndex].SampleList[i];
-            float4 weights = (float4)DecodeWeights(csample.Weights);// / totalWeights;
-            uint v = csample.Visibility;
+            float4 weights = (float4)DecodeWeights(msample.SampleMask);
+            uint v = msample.Visibility;
             if (v == 0)
             {
                 color[0] += weights[0] * float4(0.3, 0, 0, 1);
@@ -380,10 +396,25 @@ void ColorPass(uint3 pos : SV_DispatchThreadID)
 
                 GBufferSample gSample = GetGBufferSample(v, viewPos);
 
-                color[0] += weights[0] * float4(float3(1, 1 /*totalWeights[0] / 8*/, 1) * dot(gSample.ViewNormal, normalize(float3(1, 1, 1))), 1);
-                color[1] += weights[1] * float4(float3(1, 1 /*totalWeights[1] / 8*/, 1) * dot(gSample.ViewNormal, normalize(float3(1, 1, 1))), 1);
-                color[2] += weights[2] * float4(float3(1, 1 /*totalWeights[2] / 8*/, 1) * dot(gSample.ViewNormal, normalize(float3(1, 1, 1))), 1);
-                color[3] += weights[3] * float4(float3(1, 1 /*totalWeights[3] / 8*/, 1) * dot(gSample.ViewNormal, normalize(float3(1, 1, 1))), 1);
+                float3 albedo0 = float3(1, 1, 1);
+                float3 albedo1 = float3(1, 1, 1);
+                float3 albedo2 = float3(1, 1, 1);
+                float3 albedo3 = float3(1, 1, 1);
+
+                //albedo0.y *= totalWeights[0] / 8.0f;
+                //albedo1.y *= totalWeights[1] / 8.0f;
+                //albedo2.y *= totalWeights[2] / 8.0f;
+                //albedo3.y *= totalWeights[3] / 8.0f;
+
+                //albedo0 *= gSample.Barycentric * weights[0] / totalWeights[0];
+                //albedo1 *= gSample.Barycentric * weights[1] / totalWeights[1];
+                //albedo2 *= gSample.Barycentric * weights[2] / totalWeights[2];
+                //albedo3 *= gSample.Barycentric * weights[3] / totalWeights[3];
+
+                color[0] += weights[0] * float4(albedo0 * dot(gSample.ViewNormal, normalize(float3(1, 1, 1))), 1);
+                color[1] += weights[1] * float4(albedo1 * dot(gSample.ViewNormal, normalize(float3(1, 1, 1))), 1);
+                color[2] += weights[2] * float4(albedo2 * dot(gSample.ViewNormal, normalize(float3(1, 1, 1))), 1);
+                color[3] += weights[3] * float4(albedo3 * dot(gSample.ViewNormal, normalize(float3(1, 1, 1))), 1);
             }
         }
     }
@@ -476,6 +507,7 @@ void ColorPass(uint3 pos : SV_DispatchThreadID)
 
     uint2 spos = pos.xy; //DecodeGroupPos(computableBuffer[computableIndex].SampleList[0].ScreenPos);
     float4 posColor = 1;//float4(spos.x == pos.x ? 1.0f: 0.5f, 1.0f, spos.y == pos.y ? 1.0f: 0.5f, 1.0f);
+    //float4 posColor = float4(spos.x == pos.x ? 1.0f: 0.5f, 1.0f, spos.y == pos.y ? 1.0f: 0.5f, 1.0f);
 
     colorUav[spos.xy * PSampleXY + uint2(0, 0)] = posColor * float4(color[0].xyz / color[0].w, 1);
     colorUav[spos.xy * PSampleXY + uint2(1, 0)] = posColor * float4(color[1].xyz / color[1].w, 1);
