@@ -954,8 +954,12 @@ ObjModel LoadObjModel(AssetUploader& uploader, RenderDevice& renderDevice)
 {
     ObjModel model;
     
-    //auto const f = fopen(R"(X:\TEMP\MaryRoseTankard_100kMesh.obj)", "r");
-    auto const f = fopen(R"(C:\Users\jcab\Downloads\ameise\source\Ameise_C\Ameise_C.obj)", "r");
+    //FILE* const f = fopen(R"(X:\TEMP\MaryRoseTankard_100kMesh.obj)", "r");
+    FILE* const f = fopen(R"(C:\Users\jcab\Downloads\ameise\source\Ameise_C\Ameise_C.obj)", "r");
+    if (!f)
+    {
+        return {};
+    }
     while (!feof(f))
     {
         std::array<char, 2048> buffer;
