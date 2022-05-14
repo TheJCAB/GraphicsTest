@@ -242,6 +242,8 @@ struct Instance
 
     Model::Id ModelId = Model::Id::Invalid;
 
+    XMVECTOR Pos{};
+
     uint16_t Yaw   = 0;
     uint16_t Pitch = 0;
     uint16_t Roll  = 0;
@@ -342,7 +344,7 @@ void UpdateModelInstance(RenderDevice const& renderDevice, InstanceManager& inst
     }
 
     XMMATRIX const modelMatrix = XMMatrixRotationRollPitchYaw(instance.Pitch * (2.0f * XM_PI / 65536.0f), instance.Yaw * (2.0f * XM_PI / 65536.0f), instance.Roll * (2.0f * XM_PI / 65536.0));
-    XMMATRIX const translation = XMMatrixTranslation(4, 0, 0);
+    XMMATRIX const translation = XMMatrixTranslation(2, 0, 0);
 
     auto& attributes = instanceManager.GetCurrentFrameInstanceAttributes(renderDevice, instanceId);
     XMStoreFloat4x4(&attributes.View      , XMMatrixTranspose(modelMatrix * translation * View    ));
@@ -360,11 +362,11 @@ void UpdateStaticModelInstance(RenderDevice const& renderDevice, InstanceManager
 
     XMMATRIX const modelMatrix = XMMatrixRotationRollPitchYaw(instance.Pitch * (2.0f * XM_PI / 65536.0f), instance.Yaw * (2.0f * XM_PI / 65536.0f), instance.Roll * (2.0f * XM_PI / 65536.0));
 
-    XMMATRIX const scale = XMMatrixScaling(1, 1, 1); //XMMatrixScaling(100, 100, 100);
+    XMMATRIX const translation = XMMatrixTranslationFromVector(instance.Pos);
 
     auto& attributes = instanceManager.GetCurrentFrameInstanceAttributes(renderDevice, instanceId);
-    XMStoreFloat4x4(&attributes.View      , XMMatrixTranspose(scale * modelMatrix * View    ));
-    XMStoreFloat4x4(&attributes.Projection, XMMatrixTranspose(scale * modelMatrix * ViewProj));
+    XMStoreFloat4x4(&attributes.View      , XMMatrixTranspose(modelMatrix * translation * View    ));
+    XMStoreFloat4x4(&attributes.Projection, XMMatrixTranspose(modelMatrix * translation * ViewProj));
 };
 
 
@@ -492,6 +494,9 @@ CpuAccessibleBuffer<T>::CpuAccessibleBuffer(RenderDevice& renderDevice)
     ThrowIfFailed(Buffer->Map(0, &readRange, reinterpret_cast<void**>(&pData)));
 }
 
+
+
+
 struct MsaaGatherPass
 {
     ComPtr<ID3D12RootSignature> RootSignature;
@@ -502,18 +507,17 @@ struct MsaaGatherPass
         uint32_t Visibility; // 32 bits instance + tri
         uint32_t SampleMask; // UNORM  4 * 5 = 20 bits compressed
     };
-    struct MsaaQuad
-    {
-        uint32_t   SampleCount;  // 32 bits
-        MsaaSample SampleList[4];
-    };
     ComPtr<ID3D12Resource> MsaaSampleBuffer;
     UINT                   MsaaSampleBufferUav;
+    ComPtr<ID3D12Resource> MsaaSampleCountBuffer;
+    UINT                   MsaaSampleCountBufferUav;
 
     MsaaGatherPass(RenderDevice& renderDevice);
 
     void Render(RenderDevice const&, VisibilityPass const&, ModelManager const&, InstanceManager const&) const;
 };
+
+constexpr uint8_t MaxSamplesPerQuad = 8;
 
 MsaaGatherPass::MsaaGatherPass(RenderDevice& renderDevice)
 {
@@ -521,7 +525,7 @@ MsaaGatherPass::MsaaGatherPass(RenderDevice& renderDevice)
     RootSignature = renderDevice.CreateRootSignature<
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, 1,                     0>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<2, 1,                     0>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<2, 1,                     0>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<2, 2,                     0>>,
         Root::Flags<D3D12_ROOT_SIGNATURE_FLAG_NONE>
     >();
 
@@ -533,14 +537,26 @@ MsaaGatherPass::MsaaGatherPass(RenderDevice& renderDevice)
         }
     );
 
-    MsaaSampleBuffer = CreateGpuBuffer(renderDevice.device, (1280 * 720 / 4) * sizeof(MsaaQuad));
+    MsaaSampleBuffer = CreateGpuBuffer(renderDevice.device, (1280 * 720 / 4) * MaxSamplesPerQuad * sizeof(MsaaSample));
     MsaaSampleBufferUav = renderDevice.AllocateUavDescriptor(MsaaSampleBuffer,
         {
             .Format        = DXGI_FORMAT_UNKNOWN,
             .ViewDimension = D3D12_UAV_DIMENSION_BUFFER,
             .Buffer{
+                .NumElements = (1280 * 720 / 4) * MaxSamplesPerQuad,
+                .StructureByteStride = sizeof(MsaaSample),
+            },
+        }
+    );
+
+    MsaaSampleCountBuffer = CreateGpuBuffer(renderDevice.device, (1280 * 720 / 4) * sizeof(uint32_t));
+    MsaaSampleCountBufferUav = renderDevice.AllocateUavDescriptor(MsaaSampleCountBuffer,
+        {
+            .Format        = DXGI_FORMAT_UNKNOWN,
+            .ViewDimension = D3D12_UAV_DIMENSION_BUFFER,
+            .Buffer{
                 .NumElements = 1280 * 720 / 4,
-                .StructureByteStride = sizeof(MsaaQuad),
+                .StructureByteStride = sizeof(uint32_t),
             },
         }
     );
@@ -575,10 +591,6 @@ struct ComputableGatherPass
         uint32_t ScreenPos;  // 32 bits
         float    Depth;      // As is, 32 bits
     };
-    struct ComputableQuad
-    {
-        ComputableSample SampleList[4];
-    };
     ComPtr<ID3D12Resource> ComputableSampleBuffer;
     UINT                   ComputableSampleBufferUav;
 
@@ -594,7 +606,7 @@ ComputableGatherPass::ComputableGatherPass(RenderDevice& renderDevice)
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, 1,                     0>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<2, 1,                     0>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<1, 1,                     0>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<2, 1,                     0>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<2, 2,                     0>>,
         Root::Flags<D3D12_ROOT_SIGNATURE_FLAG_NONE>
     >();
 
@@ -606,14 +618,14 @@ ComputableGatherPass::ComputableGatherPass(RenderDevice& renderDevice)
         }
     );
 
-    ComputableSampleBuffer = CreateGpuBuffer(renderDevice.device, (1280 * 720 / 4) * sizeof(ComputableQuad));
+    ComputableSampleBuffer = CreateGpuBuffer(renderDevice.device, (1280 * 720 / 4) * MaxSamplesPerQuad * sizeof(ComputableSample));
     ComputableSampleBufferUav = renderDevice.AllocateUavDescriptor(ComputableSampleBuffer,
         {
             .Format        = DXGI_FORMAT_UNKNOWN,
             .ViewDimension = D3D12_UAV_DIMENSION_BUFFER,
             .Buffer{
-                .NumElements = 1280 * 720 / 4,
-                .StructureByteStride = sizeof(ComputableQuad),
+                .NumElements = (1280 * 720 / 4) * MaxSamplesPerQuad,
+                .StructureByteStride = sizeof(ComputableSample),
             },
         }
     );
@@ -670,7 +682,7 @@ ColorPass::ColorPass(RenderDevice& renderDevice)
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<2, 1,                     0>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<0, 1,                     0>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<1, 1,                     0>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<2, 1,                     0>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<2, 2,                     0>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS, 1>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS, 2>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS, 3>>,
@@ -686,10 +698,10 @@ ColorPass::ColorPass(RenderDevice& renderDevice)
         }
     );
 
-    ColorBuffer = CreateIntermediateRenderTarget(renderDevice, 1280, 720, DXGI_FORMAT_R8G8B8A8_UNORM, {}, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    ColorBuffer = CreateIntermediateRenderTarget(renderDevice, 1280, 720, DXGI_FORMAT_R16G16B16A16_UNORM, {}, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
     ColorBufferUav = renderDevice.AllocateUavDescriptor(ColorBuffer.Resource,
         {
-            .Format        = DXGI_FORMAT_R8G8B8A8_UNORM,
+            .Format        = DXGI_FORMAT_R16G16B16A16_UNORM,
             .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D,
         }
     );
@@ -942,20 +954,38 @@ Model CreateCubeModel(AssetUploader& uploader, RenderDevice& renderDevice)
 struct ObjModel
 {
     using IndexSet = std::tuple<uint32_t, uint32_t>;
-    using Triangle = std::tuple<IndexSet, IndexSet, IndexSet>;
 
-    std::vector<XMFLOAT3> Positions;
-    std::vector<XMFLOAT3> Normals;
-    std::vector<Triangle> Triangles;
+    static constexpr IndexSet NullIndexSet{ UINT32_MAX, UINT32_MAX };
+
+    struct Edge
+    {
+        std::array<IndexSet, 2> Indices     { NullIndexSet, NullIndexSet };
+        std::array<uint32_t, 2> Triangles   { UINT32_MAX, UINT32_MAX };
+        uint32_t                InverseEdge = UINT32_MAX;
+        XMFLOAT3                Normal      {};
+    };
+    struct Triangle
+    {
+        std::array<IndexSet, 3> Indices           { NullIndexSet, NullIndexSet, NullIndexSet };           // Required. UINT32_MAX indicates nullness.
+        std::array<uint32_t, 3> Edges             { UINT32_MAX, UINT32_MAX, UINT32_MAX };
+        std::array<uint32_t, 3> AdjacentTriangles { UINT32_MAX, UINT32_MAX, UINT32_MAX };
+        XMFLOAT3                Normal            {};
+    };
+
+    std::vector<XMFLOAT3> Positions;    // Required.
+    std::vector<Triangle> Triangles;    // Required.
+
+    std::vector<XMFLOAT3> Normals;      // Optional.
+
+    std::vector<Edge>     Edges;        // Computed.
 };
 
 
-ObjModel LoadObjModel(AssetUploader& uploader, RenderDevice& renderDevice)
+ObjModel LoadObjModel(char const* pFilename, AssetUploader& uploader, RenderDevice& renderDevice)
 {
     ObjModel model;
     
-    //FILE* const f = fopen(R"(X:\TEMP\MaryRoseTankard_100kMesh.obj)", "r");
-    FILE* const f = fopen(R"(C:\Users\jcab\Downloads\ameise\source\Ameise_C\Ameise_C.obj)", "r");
+    FILE* const f = fopen(pFilename, "r");
     if (!f)
     {
         return {};
@@ -1004,10 +1034,10 @@ ObjModel LoadObjModel(AssetUploader& uploader, RenderDevice& renderDevice)
             if (matches == 2)
             {
                 matches = sscanf(line.data(), "f %u/%u %u/%u %u/%u %u/%u", &p0, &t0, &p1, &t1, &p2, &t2, &p3, &t3);
-                n0 = UINT32_MAX;
-                n1 = UINT32_MAX;
-                n2 = UINT32_MAX;
-                n3 = UINT32_MAX;
+                n0 = 0;
+                n1 = 0;
+                n2 = 0;
+                n3 = 0;
                 if (matches == 6)
                 {
                     matches = 9;
@@ -1023,12 +1053,20 @@ ObjModel LoadObjModel(AssetUploader& uploader, RenderDevice& renderDevice)
             }
             if (matches >= 9)
             {
-                model.Triangles.emplace_back(ObjModel::IndexSet{p0, n0}, ObjModel::IndexSet{p2, n2}, ObjModel::IndexSet{p1, n1});
+                ObjModel::Triangle triangle{};
+                triangle.Indices[0] = {p0 - 1, n0 - 1};
+                triangle.Indices[1] = {p1 - 1, n1 - 1};
+                triangle.Indices[2] = {p2 - 1, n2 - 1};
+                model.Triangles.push_back(triangle);
 
             }
             if (matches >= 12)
             {
-                model.Triangles.emplace_back(ObjModel::IndexSet{p0, n0}, ObjModel::IndexSet{p3, n3}, ObjModel::IndexSet{p2, n2});
+                ObjModel::Triangle triangle{};
+                triangle.Indices[0] = {p0 - 1, n0 - 1};
+                triangle.Indices[1] = {p2 - 1, n2 - 1};
+                triangle.Indices[2] = {p3 - 1, n3 - 1};
+                model.Triangles.push_back(triangle);
             }
         }
     }
@@ -1036,31 +1074,7 @@ ObjModel LoadObjModel(AssetUploader& uploader, RenderDevice& renderDevice)
     return model;
 }
 
-void AddObjModelMissingNormals(ObjModel& model)
-{
-    for (auto& [ v0, v1, v2 ] : model.Triangles)
-    {
-        auto& [ p0, n0 ] = v0;
-        auto& [ p1, n1 ] = v1;
-        auto& [ p2, n2 ] = v2;
-
-        if (n0 == UINT32_MAX || n1 == UINT32_MAX || n2 == UINT32_MAX)
-        {
-            uint32_t n = model.Normals.size() + 1;
-            auto xp0 = XMLoadFloat3(&model.Positions[p0 - 1]);
-            auto xp1 = XMLoadFloat3(&model.Positions[p1 - 1]);
-            auto xp2 = XMLoadFloat3(&model.Positions[p2 - 1]);
-            XMFLOAT3 norm;
-            XMStoreFloat3(&norm, XMVector3Normalize(XMVector3Cross(xp2 - xp0, xp1 - xp0)));
-            model.Normals.push_back(norm);
-            if (n0 == UINT32_MAX) n0 = n;
-            if (n1 == UINT32_MAX) n1 = n;
-            if (n2 == UINT32_MAX) n2 = n;
-        }
-    }
-}
-
-void RecenterObjModelPositions(ObjModel& model)
+void RecenterObjModelPositions(ObjModel& model, float scale)
 {
     XMFLOAT3 vmin{  1e20f,  1e20f,  1e20f };
     XMFLOAT3 vmax{ -1e20f, -1e20f, -1e20f };
@@ -1078,7 +1092,125 @@ void RecenterObjModelPositions(ObjModel& model)
 
     for (auto& pos : model.Positions)
     {
-        XMStoreFloat3(&pos, XMLoadFloat3(&pos) - center);
+        XMStoreFloat3(&pos, (XMLoadFloat3(&pos) - center) * scale);
+    }
+}
+
+void AddObjEdgesAndAdjacency(ObjModel& model)
+{
+    // Note: the two values are offset by 1 (so that the default of zero means invalid).
+    std::map<std::tuple<ObjModel::IndexSet, ObjModel::IndexSet>, uint32_t> edgeMap;
+
+    uint32_t tindex = 0;
+    for (auto& triangle : model.Triangles)
+    {
+        auto& [ v0, v1, v2 ] = triangle.Indices;
+
+        auto& e0 = edgeMap[{v0, v1}];
+        auto& e1 = edgeMap[{v1, v2}];
+        auto& e2 = edgeMap[{v2, v0}];
+
+        if (e0 == 0)
+        {
+            ObjModel::Edge edge{};
+            edge.Indices      = {v0, v1};
+            edge.Triangles[0] = tindex;
+            model.Edges.push_back(edge);
+            e0 = static_cast<uint32_t>(model.Edges.size());
+        }
+
+        if (e1 == 0)
+        {
+            ObjModel::Edge edge{};
+            edge.Indices      = {v1, v2};
+            edge.Triangles[0] = tindex;
+            model.Edges.push_back(edge);
+            e1 = static_cast<uint32_t>(model.Edges.size());
+        }
+
+        if (e2 == 0)
+        {
+            ObjModel::Edge edge{};
+            edge.Indices      = {v2, v0};
+            edge.Triangles[0] = tindex;
+            model.Edges.push_back(edge);
+            e2 = static_cast<uint32_t>(model.Edges.size());
+        }
+        triangle.Edges = { e0 - 1, e1 - 1, e2 - 1 };
+        ++tindex;
+    }
+
+    tindex = 0;
+    for (auto& triangle : model.Triangles)
+    {
+        auto& [ v0, v1, v2 ] = triangle.Indices;
+
+        auto ie0 = edgeMap[{v1, v0}];
+        auto ie1 = edgeMap[{v2, v1}];
+        auto ie2 = edgeMap[{v0, v2}];
+        if (ie0 != 0)
+        {
+            auto& iedge = model.Edges[ie0 - 1];
+            iedge.InverseEdge = triangle.Edges[0];
+            iedge.Triangles[1] = tindex;
+            auto& edge = model.Edges[iedge.InverseEdge];
+            edge.InverseEdge = ie0 - 1;
+            edge.Triangles[1] = iedge.Triangles[0];
+        }
+        if (ie1 != 0)
+        {
+            auto& iedge = model.Edges[ie1 - 1];
+            iedge.InverseEdge = triangle.Edges[1];
+            iedge.Triangles[1] = tindex;
+            auto& edge = model.Edges[iedge.InverseEdge];
+            edge.InverseEdge = ie1 - 1;
+            edge.Triangles[1] = iedge.Triangles[0];
+        }
+        if (ie2 != 0)
+        {
+            auto& iedge = model.Edges[ie2 - 1];
+            iedge.InverseEdge = triangle.Edges[2];
+            iedge.Triangles[1] = tindex;
+            auto& edge = model.Edges[iedge.InverseEdge];
+            edge.InverseEdge = ie2 - 1;
+            edge.Triangles[1] = iedge.Triangles[0];
+        }
+        ++tindex;
+    }
+}
+
+void AddObjModelMissingNormals(ObjModel& model)
+{
+    for (auto& triangle : model.Triangles)
+    {
+        auto& [ p0, n0 ] = triangle.Indices[0];
+        auto& [ p1, n1 ] = triangle.Indices[1];
+        auto& [ p2, n2 ] = triangle.Indices[2];
+
+        auto xp0 = XMLoadFloat3(&model.Positions[p0]);
+        auto xp1 = XMLoadFloat3(&model.Positions[p1]);
+        auto xp2 = XMLoadFloat3(&model.Positions[p2]);
+        XMStoreFloat3(&triangle.Normal, XMVector3Normalize(XMVector3Cross(xp1 - xp0, xp2 - xp0)));
+
+        //if (n0 == UINT32_MAX && n1 == UINT32_MAX && n2 == UINT32_MAX)
+        //{
+        //}
+        //else
+        //{
+        //    XMVECTOR normal{};
+        //    if (n0 != UINT32_MAX) normal += XMLoadFloat3(&model.Normals[n0]);
+        //    if (n1 != UINT32_MAX) normal += XMLoadFloat3(&model.Normals[n1]);
+        //    if (n2 != UINT32_MAX) normal += XMLoadFloat3(&model.Normals[n2]);
+        //    XMStoreFloat3(&triangle.Normal, XMVector3Normalize(normal));
+        //}
+        if (n0 == UINT32_MAX || n1 == UINT32_MAX || n2 == UINT32_MAX)
+        {
+            auto const n = static_cast<uint32_t>(model.Normals.size());
+            if (n0 == UINT32_MAX) n0 = n;
+            if (n1 == UINT32_MAX) n1 = n;
+            if (n2 == UINT32_MAX) n2 = n;
+            model.Normals.push_back(triangle.Normal);
+        }
     }
 }
 
@@ -1096,35 +1228,24 @@ std::vector<Model> UploadObjModel(ObjModel const& model, AssetUploader& uploader
     std::vector<TriangleIndices> indices;
     std::vector<TriangleParameters> triangleParams;
 
-    using Edge = std::tuple<uint32_t, uint32_t>;
-
-    std::map<Edge, uint32_t> edgeTriangleMap;
-
     uint32_t vcount = 0;
 
-    for (auto const [ v0, v1, v2 ] : model.Triangles)
+    for (auto const& triangle : model.Triangles)
     {
-        auto const [ p0, n0 ] = v0;
-        auto const [ p1, n1 ] = v1;
-        auto const [ p2, n2 ] = v2;
+        auto const [ p0, n0 ] = triangle.Indices[0];
+        auto const [ p1, n1 ] = triangle.Indices[1];
+        auto const [ p2, n2 ] = triangle.Indices[2];
 
-        auto&& addTriangle =
-            [&](uint32_t p0, uint32_t p1, uint32_t p2, uint32_t n0, uint32_t n1, uint32_t n2)
-            {
-                auto& v0 = vertices[std::tuple{p0, n0}];
-                auto& v1 = vertices[std::tuple{p1, n1}];
-                auto& v2 = vertices[std::tuple{p2, n2}];
-                if (v0 == 0) { v0 = ++vcount; vertexPositions.emplace_back(model.Positions[p0 - 1]); vertexAttributes.emplace_back(model.Normals[n0 - 1], 0xFFFFFFFFu); }
-                if (v1 == 0) { v1 = ++vcount; vertexPositions.emplace_back(model.Positions[p1 - 1]); vertexAttributes.emplace_back(model.Normals[n1 - 1], 0xFFFFFFFFu); }
-                if (v2 == 0) { v2 = ++vcount; vertexPositions.emplace_back(model.Positions[p2 - 1]); vertexAttributes.emplace_back(model.Normals[n2 - 1], 0xFFFFFFFFu); }
-                indices.emplace_back(TriangleIndices{v0 - 1, v1 - 1, v2 - 1});
-                triangleParams.emplace_back(0xFFFF'FFFFu);
-            };
+        auto& v0 = vertices[std::tuple{p0, n0}];
+        auto& v1 = vertices[std::tuple{p1, n1}];
+        auto& v2 = vertices[std::tuple{p2, n2}];
+        if (v0 == 0) { v0 = ++vcount; vertexPositions.emplace_back(model.Positions[p0]); vertexAttributes.emplace_back(model.Normals[n0], 0xFFFFFFFFu); }
+        if (v1 == 0) { v1 = ++vcount; vertexPositions.emplace_back(model.Positions[p1]); vertexAttributes.emplace_back(model.Normals[n1], 0xFFFFFFFFu); }
+        if (v2 == 0) { v2 = ++vcount; vertexPositions.emplace_back(model.Positions[p2]); vertexAttributes.emplace_back(model.Normals[n2], 0xFFFFFFFFu); }
+        indices.emplace_back(TriangleIndices{v0 - 1, v2 - 1, v1 - 1});
+        triangleParams.emplace_back(0xFFFF'FFFFu);
 
-
-        addTriangle(p0, p1, p2, n0, n1, n2);
-
-        if (indices.size() >= (0x100000 / 12) - 2)
+        if (indices.size() >= ((1 << D3D12_WHQL_DRAWINDEXED_INDEX_COUNT_2_TO_EXP) / 3) - 2)
         {
             result.push_back(CreateModel(uploader, renderDevice, { indices, triangleParams }, { vertexPositions, vertexAttributes }));
 
@@ -1163,7 +1284,6 @@ struct Assets
     std::shared_ptr<InstanceManager> instanceManager;
 
     Model::Id                        cube;
-    Model::Id                        objModel;
     Instance::Id                     cubeInstances[2];
     std::vector<Instance::Id>        objModelInstances;
 };
@@ -1214,15 +1334,33 @@ Assets LoadAssets(RenderDevice& renderDevice)
         instance.Roll  = static_cast<uint16_t>(rand());
     }
 
-    auto objModel = LoadObjModel(uploader, renderDevice);
-    RecenterObjModelPositions(objModel);
-    AddObjModelMissingNormals(objModel);
-
-    for (auto& model : UploadObjModel(objModel, uploader, renderDevice))
     {
-        assets.objModel = assets.modelManager->AllocateNewModel(renderDevice, std::move(model));
-        assets.objModelInstances.push_back(assets.instanceManager->AllocateNewInstance(renderDevice, *assets.modelManager, Instance{assets.objModel}));
+        auto objModel = LoadObjModel(R"(X:\TEMP\MaryRoseTankard_100kMesh.obj)", uploader, renderDevice);
+        RecenterObjModelPositions(objModel, 50);
+        AddObjEdgesAndAdjacency  (objModel);
+        AddObjModelMissingNormals(objModel);
+
+        for (auto& model : UploadObjModel(objModel, uploader, renderDevice))
+        {
+            auto const modelId = assets.modelManager->AllocateNewModel(renderDevice, std::move(model));
+            assets.objModelInstances.push_back(assets.instanceManager->AllocateNewInstance(renderDevice, *assets.modelManager, Instance{modelId, XMVectorSet(-8, 0, 0, 0)}));
+        }
     }
+
+    {
+        auto objModel = LoadObjModel(R"(C:\Users\jcab\Downloads\ameise\source\Ameise_C\Ameise_C.obj)", uploader, renderDevice);
+        RecenterObjModelPositions(objModel, 1);
+        AddObjEdgesAndAdjacency  (objModel);
+        AddObjModelMissingNormals(objModel);
+
+        for (auto& model : UploadObjModel(objModel, uploader, renderDevice))
+        {
+            auto const modelId = assets.modelManager->AllocateNewModel(renderDevice, std::move(model));
+            assets.objModelInstances.push_back(assets.instanceManager->AllocateNewInstance(renderDevice, *assets.modelManager, Instance{modelId}));
+        }
+    }
+
+    //FILE* const f = fopen(, "r");
 
     return assets;
 }

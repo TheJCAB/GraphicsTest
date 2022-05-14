@@ -137,6 +137,10 @@ float3 GetBarycentric(uint modelIndex, uint3 indices, float4x4 modelToView, floa
     return bary / dot(bary, 1);
 }
 
+static const uint NumQuadsX = 1280 / PSamplesX;
+static const uint NumQuadsY = 720 / PSamplesY;
+static const uint NumQuads = 1280 * 720 / PSamples;
+
 struct MsaaSample
 {
     uint  Visibility; // 32 bits instance + tri
@@ -149,28 +153,18 @@ struct MsaaQuad
     MsaaSample SampleList[4];
 };
 
-struct ComputableSample
-{
-    uint  ScreenPos;  // 32 bits
-    float Depth;      // As is, 32 bits
-};
-// 128 bits compressed.
-
-struct ComputableQuad
-{
-    ComputableSample SampleList[4];
-};
-
-RWStructuredBuffer<MsaaQuad> msaaBuffer : register(u2, space0);
-RWStructuredBuffer<ComputableQuad> computableBuffer : register(u1, space0);
+RWStructuredBuffer<MsaaSample> msaaBuffer : register(u2, space0);
+RWStructuredBuffer<uint> msaaSampleCountBuffer : register(u3, space0);
 
 groupshared uint2 visibilityListGS[(32 / PSamplesX) * (16 / PSamplesY)][8 * PSamples];
-#define visibilityList visibilityListGS[tindex]
 
 [numthreads(32 / PSamplesX, 16 / PSamplesY, 1)]
 void MsaaGatherPass(uint3 pos : SV_DispatchThreadID, uint tindex : SV_GroupIndex)
 {
+    // Register arrays are more expensive, apparently, so we use GDS.
     //uint2 visibilityList[8 * PSamples];
+    #undef visibilityList
+    #define visibilityList visibilityListGS[tindex]
     uint numSamples = 0;
     {
         uint sampleBit = 1;
@@ -196,70 +190,88 @@ void MsaaGatherPass(uint3 pos : SV_DispatchThreadID, uint tindex : SV_GroupIndex
 
     uint i = 0;
 
-    // Pick the top samples
-    uint maxSamples = 4;
-    if (numSamples > maxSamples)
+    // Pick the top samples, aiming to cover 7/8 of all pixels, but of course we need at least one.
+    if (numSamples > 1)
     {
+        uint maxSamples = min(numSamples, 8);
         uint4 samplesLeft = uint4(8, 8, 8, 8);
         for (i = 0; i < maxSamples; ++i)
         {
-            uint4 foundBits = uint4(
-                countbits(visibilityList[i].y & 0xFF),
-                countbits(visibilityList[i].y & 0xFF00),
-                countbits(visibilityList[i].y & 0xFF0000),
-                countbits(visibilityList[i].y & 0xFF000000)
-            );
+            uint foundIndex = i;
+            uint4 foundBits = countbits(uint4(
+                visibilityList[i].y & 0xFF,
+                visibilityList[i].y & 0xFF00,
+                visibilityList[i].y & 0xFF0000,
+                visibilityList[i].y & 0xFF000000
+            ));
             uint foundBitsCount = dot(samplesLeft, foundBits);
 
             for (uint s = i + 1; s < numSamples; ++s)
             {
-                uint4 sBits = uint4(
-                    countbits(visibilityList[s].y & 0xFF),
-                    countbits(visibilityList[s].y & 0xFF00),
-                    countbits(visibilityList[s].y & 0xFF0000),
-                    countbits(visibilityList[s].y & 0xFF000000)
-                );
+                uint4 sBits = countbits(uint4(
+                    visibilityList[s].y & 0xFF,
+                    visibilityList[s].y & 0xFF00,
+                    visibilityList[s].y & 0xFF0000,
+                    visibilityList[s].y & 0xFF000000
+                ));
                 uint sBitsCount = dot(samplesLeft, sBits);
                 if (foundBitsCount < sBitsCount)
                 {
-                    uint2 tmp = visibilityList[i];
-                    visibilityList[i] = visibilityList[s];
-                    visibilityList[s] = tmp;
-                    foundBits = sBits;
+                    foundIndex     = s;
+                    foundBits      = sBits;
                     foundBitsCount = sBitsCount;
                 }
             }
+            if (foundIndex != i)
+            {
+                uint2 tmp = visibilityList[i];
+                visibilityList[i] = visibilityList[foundIndex];
+                visibilityList[foundIndex] = tmp;
+            }
             samplesLeft -= foundBits;
+            if (dot(min(samplesLeft, 1), uint4(1, 8, 16, 24)) == dot(samplesLeft, uint4(1, 8, 16, 24)))
+            {
+                ++i;
+                break;
+            }
         }
-        numSamples = maxSamples;
+        numSamples = i;
     }
 
-    uint quadIndex = pos.x + pos.y * (1280 / PSamplesX);
+    uint quadIndex = pos.x + pos.y * NumQuadsX;
 
-    msaaBuffer[quadIndex].SampleCount = numSamples;
+    msaaSampleCountBuffer[quadIndex] = numSamples;
 
     for (i = 0; i < numSamples; ++i)
     {
         MsaaSample result;
         result.Visibility = visibilityList[i].x;
         result.SampleMask = visibilityList[i].y;
-        msaaBuffer[quadIndex].SampleList[i] = result;
+        msaaBuffer[i * NumQuads + quadIndex] = result;
     }
 }
+
+struct ComputableSample
+{
+    uint  ScreenPos;  // 32 bits
+    float Depth;      // As is, 32 bits
+};
+
+RWStructuredBuffer<ComputableSample> computableBuffer : register(u1, space0);
 
 [numthreads(32 / PSamplesX, 16 / PSamplesY, 1)]
 void ComputableGatherPass(uint3 pos : SV_DispatchThreadID, uint tindex : SV_GroupIndex)
 {
-    uint quadIndex = pos.x + pos.y * (1280 / PSamplesX);
+    uint quadIndex = pos.x + pos.y * NumQuadsX;
 
-    uint numSamples = msaaBuffer[quadIndex].SampleCount;
+    uint numSamples = msaaSampleCountBuffer[quadIndex];
 
     for (uint i = 0; i < numSamples; ++i)
     {
         ComputableSample result;
 
-        uint v    = msaaBuffer[quadIndex].SampleList[i].Visibility;
-        uint mask = msaaBuffer[quadIndex].SampleList[i].SampleMask;
+        uint v    = msaaBuffer[i * NumQuads + quadIndex].Visibility;
+        uint mask = msaaBuffer[i * NumQuads + quadIndex].SampleMask;
         if (v == 0)
         {
             result.ScreenPos = 0; // TODO: calculate from pos.xy
@@ -294,7 +306,7 @@ void ComputableGatherPass(uint3 pos : SV_DispatchThreadID, uint tindex : SV_Grou
             result.Depth      = viewPos.z;
         }
 
-        computableBuffer[quadIndex].SampleList[i] = result;
+        computableBuffer[i * NumQuads + quadIndex] = result;
     }
 }
 
@@ -360,35 +372,40 @@ GBufferSample GetGBufferSample(uint visibility, float3 viewPos)
     //    ((color >> 24) & 0xFF) / 255.0f);
 
 
+float4 LinearToGamma(float4 color)
+{
+    return float4(pow(color.xyz, 1.0f / 2.2f), color.w);
+}
+
 [numthreads(64 / PSamplesX, 16 / PSamplesY, 1)]
 void ColorPass(uint3 pos : SV_DispatchThreadID)
 {
     float4x4 color = 0;
 
-    uint computableIndex = pos.x + pos.y * (1280 / PSamplesX);
+    uint computableIndex = pos.x + pos.y * NumQuadsX;
 
-    uint numSamples = msaaBuffer[computableIndex].SampleCount;
+    uint numSamples = msaaSampleCountBuffer[computableIndex];
 
 
-    float4 totalWeights = 0;
+    uint4 totalWeights = 0;
     [unroll(4)] for (uint k = 0; k < numSamples; ++k)
     {
-        totalWeights += (float4)DecodeWeights(msaaBuffer[computableIndex].SampleList[k].SampleMask);
+        totalWeights += DecodeWeights(msaaBuffer[k * NumQuads + computableIndex].SampleMask);
     }
 
     {
         for (int i = 0; i < numSamples; ++i)
         {
-            MsaaSample       msample = msaaBuffer      [computableIndex].SampleList[i];
-            ComputableSample csample = computableBuffer[computableIndex].SampleList[i];
-            float4 weights = (float4)DecodeWeights(msample.SampleMask);
+            MsaaSample       msample = msaaBuffer      [i * NumQuads + computableIndex];
+            ComputableSample csample = computableBuffer[i * NumQuads + computableIndex];
+            float4 weights = (float4)DecodeWeights(msample.SampleMask) + 0.01f;
             uint v = msample.Visibility;
             if (v == 0)
             {
-                color[0] += weights[0] * float4(0.3, 0, 0, 1);
-                color[1] += weights[1] * float4(0.3, 0, 0, 1);
-                color[2] += weights[2] * float4(0.3, 0, 0, 1);
-                color[3] += weights[3] * float4(0.3, 0, 0, 1);
+                color[0] += weights[0] * float4(0.1, 0, 0, 1);
+                color[1] += weights[1] * float4(0.1, 0, 0, 1);
+                color[2] += weights[2] * float4(0.1, 0, 0, 1);
+                color[3] += weights[3] * float4(0.1, 0, 0, 1);
             }
             else
             {
@@ -546,5 +563,28 @@ float4 ResolveVS(uint index : SV_VertexID) : SV_Position
 
 float4 ResolvePS(float4 position : SV_Position) : SV_Target
 {
-    return colorMap[floor(position.xy)];
+    uint2 pos = floor(position.xy);
+    // Since we're rendering in quads, we can see some pixelation on quad boundaries, so we apply a small filter across the quad boundary.
+    // If the difference within the quad is much smaller than the difference with the next quad,
+    // we'll push the color a tad towards the next quad's color.
+    // We do this in both cartesian directions.
+    float factor = 0.2f;
+    float4 pixelColor     = colorMap[pos];
+    float4 oppositeColorX = colorMap[pos ^ uint2(1, 0)];
+    float4 oppositeColorY = colorMap[pos ^ uint2(0, 1)];
+    float4 neighborColorX = colorMap[uint2(pos.x & 1 ? pos.x + 1 : pos.x - 1, pos.y)];
+    float4 neighborColorY = colorMap[uint2(pos.x, pos.y & 1 ? pos.y + 1 : pos.y - 1)];
+    float4 x = (1 - abs(pixelColor - oppositeColorX)) * abs(pixelColor - neighborColorX) * factor;
+    float4 y = (1 - abs(pixelColor - oppositeColorY)) * abs(pixelColor - neighborColorY) * factor;
+    pixelColor = pixelColor * (1 - x - y + x * y) + neighborColorX * (x - 0.5f * x * y) + neighborColorX * (y - 0.5f * x * y);
+    return LinearToGamma(
+        pixelColor
+        /*
+        * 0.4f +
+        colorMap[floor(position.xy) + uint2(-1, 0)] * 0.15f +
+        colorMap[floor(position.xy) + uint2( 1, 0)] * 0.15f +
+        colorMap[floor(position.xy) + uint2(0, -1)] * 0.15f +
+        colorMap[floor(position.xy) + uint2(0,  1)] * 0.15f
+        */
+    );
 }
