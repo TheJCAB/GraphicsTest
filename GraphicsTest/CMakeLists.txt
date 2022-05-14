@@ -7,7 +7,9 @@ cmake_minimum_required (VERSION 3.20)
 add_executable (GraphicsTest WIN32
 	GraphicsTest.cpp
 
-	JcabD3D.cpp			JcabD3D.h
+	JcabD3D.cpp         JcabD3D.h
+	Model.cpp           Model.h
+	Pipeline.cpp        Pipeline.h
 )
 
 target_compile_definitions(GraphicsTest PRIVATE UNICODE _UNICODE)

@@ -648,3 +648,30 @@ IntermediateDepthBuffer CreateIntermediateDepthBuffer(
     D3D12_RESOURCE_STATES initialState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
     uint32_t              msaa = 1
 );
+
+
+
+template < typename T >
+struct CpuAccessibleBuffer
+{
+    ComPtr<ID3D12Resource> Buffer{};
+    T*                     pData = nullptr;
+
+    CpuAccessibleBuffer() = default;
+
+    explicit CpuAccessibleBuffer(RenderDevice& renderDevice);
+
+    explicit operator bool() const { return pData != nullptr; }
+    operator ComRef<ID3D12Resource>() const { return Buffer; }
+    operator T*  () const { return pData; }
+    T& operator* () const { return *pData; }
+    T* operator->() const { return pData; }
+};
+
+template < typename T >
+CpuAccessibleBuffer<T>::CpuAccessibleBuffer(RenderDevice& renderDevice)
+    : Buffer{ CreateUploadBuffer(renderDevice.device, sizeof(*pData)) }
+{
+    D3D12_RANGE const readRange{ .Begin = 0, .End = 0 }; // We do not intend to read from this resource on the CPU.
+    ThrowIfFailed(Buffer->Map(0, &readRange, reinterpret_cast<void**>(&pData)));
+}
