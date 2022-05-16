@@ -6,6 +6,8 @@
 
 #include <shlobj.h>
 
+#include <string_view>
+#include <string>
 #include <array>
 #include <span>
 #include <vector>
@@ -17,12 +19,94 @@ inline bool g_animate = false;
 // Shared with the shader.
 #define MAX_MODEL_DEFINITIONS     100
 #define MAX_INSTANCE_DEFINITIONS 1000
+#define MAX_MATERIAL_DEFINITIONS 1000
+#define MAX_TEXTURES             1000
 
 
 inline XMMATRIX View;
 inline XMMATRIX Projection;
 inline XMMATRIX InverseProjection;
 inline XMMATRIX ViewProj;
+
+
+struct Texture
+{
+    enum Id : uint32_t { Invalid = 0 };
+
+    std::filesystem::path  Path;
+    ComPtr<ID3D12Resource> Resource;
+};
+
+struct TextureManager
+{
+    uint32_t                          TextureCount{};
+    std::array<Texture, MAX_TEXTURES> TextureList{};
+    UINT                              FirstSrv = 0;
+
+    TextureManager(RenderDevice&);
+    Texture::Id AllocateNewTexture(RenderDevice&, AssetUploader&, std::string_view pathName);
+
+    UINT GetTexturesDescriptorTable() const { return FirstSrv; }
+
+    Texture::Id FindTexture(std::string_view path);
+
+    uint32_t GetTextureIndex(Texture::Id const id) const
+    {
+        assert(id != Texture::Id::Invalid);
+        auto const index = static_cast<uint32_t>(id) - 1;
+        assert(index < TextureList.size());
+        assert(index < TextureCount);
+        return index;
+    }
+
+    Texture&       GetTexture(Texture::Id id)       { return TextureList[GetTextureIndex(id)]; }
+    Texture const& GetTexture(Texture::Id id) const { return TextureList[GetTextureIndex(id)]; }
+};
+
+struct Material
+{
+    enum Id : uint32_t { Invalid = 0 };
+
+    XMFLOAT3    AmbientColor;
+    XMFLOAT3    DiffuseColor;
+    XMFLOAT3    SpecularColor;
+    float       SpecularExponent;
+    std::string DiffuseTexturePathName;
+};
+
+struct MaterialParameters
+{
+    XMFLOAT3    AmbientColor;
+    XMFLOAT3    DiffuseColor;
+    XMFLOAT3    SpecularColor;
+    float       SpecularExponent;
+    Texture::Id DiffuseTexture;
+};
+
+struct MaterialManager
+{
+    UINT                                                         MaterialCount = 0;
+    ConstantBuffer<MaterialParameters, MAX_MATERIAL_DEFINITIONS> MaterialList  {};
+    UINT                                                         Srv = 0;
+
+    MaterialManager(RenderDevice&);
+    Material::Id AllocateNewMaterial(RenderDevice&, AssetUploader&, TextureManager&, Material&&);
+
+    UINT GetMaterialsSrv() const { return Srv; }
+
+    uint32_t GetMaterialIndex(Material::Id const id) const
+    {
+        assert(id != Material::Id::Invalid);
+        auto const index = static_cast<uint32_t>(id) - 1;
+        assert(index < MaterialList.Get().size());
+        assert(index < MaterialCount);
+        return index;
+    }
+
+    //Material&       GetMaterial(Material::Id id)       { return MaterialList[GetMaterialIndex(id)]; }
+    //Material const& GetMaterial(Material::Id id) const { return MaterialList[GetMaterialIndex(id)]; }
+};
+
 
 
 struct VertexPosition
@@ -33,6 +117,7 @@ struct VertexPosition
 struct VertexAttributes
 {
     XMFLOAT3 normal;
+    XMFLOAT2 uv;
     uint32_t color;
 };
 
@@ -40,6 +125,7 @@ struct TriangleParameters
 {
     uint32_t color;
     uint32_t patch;
+    uint32_t materialIndex;
 };
 
 
@@ -140,6 +226,7 @@ struct Instance
 
     Model::Id ModelId = Model::Id::Invalid;
 
+    float Scale = 1.0f;
     XMVECTOR Pos{};
 
     uint16_t Yaw   = 0;

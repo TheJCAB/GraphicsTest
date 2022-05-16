@@ -218,6 +218,27 @@ RenderDevice RenderDevice::Create(HWND const hwnd)
     renderDevice.srvDescriptorHeap     = renderDevice.srvDescriptorHeap    .Create(renderDevice.device.Get(), 10000, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
     renderDevice.samplerDescriptorHeap = renderDevice.samplerDescriptorHeap.Create(renderDevice.device.Get(),    10, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
 
+    {
+        auto const defaultSamplerIndex = renderDevice.samplerDescriptorHeap.AllocateDescriptors(1);
+        assert(defaultSamplerIndex == 0);
+        auto handle = renderDevice.samplerDescriptorHeap.GetCpuDescriptorHandle(defaultSamplerIndex);
+    
+        D3D12_SAMPLER_DESC const wrapSamplerDesc
+        {
+            .Filter         = D3D12_FILTER_MIN_MAG_MIP_LINEAR,
+            .AddressU       = D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+            .AddressV       = D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+            .AddressW       = D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+            .MipLODBias     = 0.0f,
+            .MaxAnisotropy  = 1,
+            .ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS,
+            .BorderColor    {},
+            .MinLOD         = 0,
+            .MaxLOD         = D3D12_FLOAT32_MAX,
+        };
+        renderDevice.device->CreateSampler(&wrapSamplerDesc, handle);
+    }
+
     // Create frame resources.
     {
         auto rtvIndex = renderDevice.rtvDescriptorHeap.AllocateDescriptors(FrameCount);
@@ -290,6 +311,12 @@ ComPtr<ID3D12GraphicsCommandList> RenderDevice::CreateDirectCommandList(ComRef<I
     ComPtr<ID3D12GraphicsCommandList> commandList;
     ThrowIfFailed(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator, pipelineState, IID_PPV_ARGS(&commandList)));
     return commandList;
+}
+
+void RenderDevice::UploadSrvDescriptor(UINT index, ComRef<ID3D12Resource> const resource)
+{
+    auto handle = srvDescriptorHeap.GetCpuDescriptorHandle(index);
+    device->CreateShaderResourceView(resource, nullptr, handle);
 }
 
 void RenderDevice::UploadSrvDescriptor(UINT index, ComRef<ID3D12Resource> const resource, D3D12_SHADER_RESOURCE_VIEW_DESC const& desc)
@@ -546,7 +573,7 @@ ComPtr<ID3D12Resource> CreateGpuBuffer(ComRef<ID3D12Device> const device, UINT c
 }
 
 ComPtr<ID3D12Resource> AssetUploader::CreateStaticBuffer(
-    UINT                       const size,
+    uint32_t                   const size,
     D3D12_RESOURCE_STATES      const initialState,
     std::function<void(void*)> const dataFill
 )
@@ -582,6 +609,68 @@ ComPtr<ID3D12Resource> AssetUploader::CreateStaticBuffer(
     ThrowIfFailed(m_commandList->Reset(m_allocator.Get(), nullptr));
 
     return buffer;
+}
+
+ComPtr<ID3D12Resource> AssetUploader::CreateStaticTexture(
+    uint32_t                                                       width,
+    uint32_t                                                       height,
+    D3D12_RESOURCE_STATES                                          initialState,
+    std::function<void(uint32_t x, uint32_t y, uint32_t w, void*)> dataFill
+)
+{
+    ComPtr<ID3D12Resource> texture;
+
+    Texture2DDesc desc{ width, height, DXGI_FORMAT_R8G8B8A8_UNORM }; // _SRGB
+
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
+    UINT   numRows        = 0;
+    UINT64 rowSizeInBytes = 0;
+    UINT64 totalBytes     = 0;
+    m_device->GetCopyableFootprints(&desc, 0, 1, 0, &footprint, &numRows, &rowSizeInBytes, &totalBytes);
+
+    auto uploadBuffer = CreateUploadBuffer(m_device, totalBytes);
+
+    // Copy the triangle data to the vertex buffer.
+    std::byte* p;
+    ThrowIfFailed(uploadBuffer->Map(0, &NullRange, reinterpret_cast<void**>(&p)));
+    for (UINT y = 0; y < numRows; ++y)
+    {
+        dataFill(0, y, footprint.Footprint.Width, p + footprint.Offset + y * footprint.Footprint.RowPitch);
+    }
+    uploadBuffer->Unmap(0, nullptr);
+
+    ThrowIfFailed(m_device->CreateCommittedResource(
+        &StaticBufferHeapProperties,
+        D3D12_HEAP_FLAG_NONE,
+        &desc,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        nullptr,
+        IID_PPV_ARGS(&texture)));
+
+    D3D12_TEXTURE_COPY_LOCATION const destLocation
+    {
+        .pResource = texture.Get(),
+        .Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+        .SubresourceIndex = 0,
+    };
+    D3D12_TEXTURE_COPY_LOCATION const srcLocation
+    {
+        .pResource = uploadBuffer.Get(),
+        .Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+        .PlacedFootprint = footprint,
+    };
+    m_commandList->CopyTextureRegion(&destLocation, 0, 0, 0, &srcLocation, nullptr);
+
+    TransitionResource(m_commandList, texture, D3D12_RESOURCE_STATE_COPY_DEST, initialState);
+
+    // Command lists are created in the recording state, but there is nothing
+    // to record yet. The main loop expects it to be closed, so close it now.
+    ThrowIfFailed(m_commandList->Close());
+    ExecuteCommandList(m_queue, m_commandList);
+    HoldPendingObject(std::move(uploadBuffer));
+    ThrowIfFailed(m_commandList->Reset(m_allocator.Get(), nullptr));
+
+    return texture;
 }
 
 

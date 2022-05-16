@@ -91,7 +91,7 @@ struct ColorPass
 
     ColorPass(RenderDevice& renderDevice);
 
-    void Render(RenderDevice const&, ModelManager const&, InstanceManager const&, RenderPipelineAssets const&) const;
+    void Render(RenderDevice const&, TextureManager const&, MaterialManager const&, ModelManager const&, InstanceManager const&, RenderPipelineAssets const&) const;
 };
 
 struct PostprocessPass
@@ -128,5 +128,5 @@ struct RenderPipeline
 
     RenderPipeline(RenderDevice&);
 
-    void Render(RenderDevice&, ModelManager const&, InstanceManager const&);
+    void Render(RenderDevice&, TextureManager const&, MaterialManager const&, ModelManager const&, InstanceManager const&);
 };

@@ -1,7 +1,9 @@
 
 // Shared with the shader.
-#define MAX_MODEL_DEFINITIONS    100
-#define MAX_INSTANCE_DEFINITIONS 100
+#define MAX_MODEL_DEFINITIONS     100
+#define MAX_INSTANCE_DEFINITIONS 1000
+#define MAX_MATERIAL_DEFINITIONS 1000
+#define MAX_TEXTURES             1000
 
 struct InstanceAttributes
 {
@@ -35,13 +37,24 @@ uint VisibilityPS(uint triangleId : SV_PrimitiveID) : SV_Target
 struct VertexAttributes
 {
     float3 Normal;
+    float2 UV;
     uint   Color;
 };
 
-struct TriangleParamseters
+struct TriangleParameters
 {
     uint Color;
     uint Patch;
+    uint MaterialIndex;
+};
+
+struct MaterialParameters
+{
+    float3 AmbientColor;
+    float3 DiffuseColor;
+    float3 SpecularColor;
+    float  SpecularExponent;
+    uint   DiffuseTextureId;
 };
 
 
@@ -56,11 +69,15 @@ Texture2DMS<uint>  visibilityMap : register(t1, space0);
 Texture2DMS<float> depthMap      : register(t2, space0);
 
 Buffer<uint3>                         indices         [MAX_MODEL_DEFINITIONS] : register(t1, space1);
-StructuredBuffer<TriangleParamseters> triangleParams  [MAX_MODEL_DEFINITIONS] : register(t1, space2);
+StructuredBuffer<TriangleParameters>  triangleParams  [MAX_MODEL_DEFINITIONS] : register(t1, space2);
 StructuredBuffer<float3>              vertexPositions [MAX_MODEL_DEFINITIONS] : register(t1, space3);
 StructuredBuffer<VertexAttributes>    vertexAttributes[MAX_MODEL_DEFINITIONS] : register(t1, space4);
+Texture2D<float4>                     textures        [MAX_TEXTURES         ] : register(t1, space5);
+StructuredBuffer<MaterialParameters>  materials                               : register(t0, space5);
 
 RWTexture2D<float4> colorUav : register(u0, space0);
+
+sampler defaultSampler : register(s0, space0);
 
 #define PSamplesX 2
 #define PSamplesY 2
@@ -337,6 +354,7 @@ struct GBufferSample
     float3 ViewPos;         // As is, or... say 48-64 bits (plus instance index for constants)
     float3 Barycentric;     // UNORM, 32 bits compressed, possibly less
     float3 ViewNormal;      // UNORM, 2 * 15 + 2 = 32 bits compressed
+    float3 DiffuseColor;
     //float4 Weight;          // UNORM  4 * 5      = 20 bits compressed
 };
 // Say, 172 bits compressed.
@@ -351,6 +369,15 @@ GBufferSample GetGBufferSample(uint visibility, float3 viewPos)
     float4x4 modelToView = instanceList[instanceId].View;
 
     uint3 i = indices[modelIndex].Load(tri);
+    uint materialIndex = triangleParams[modelIndex][tri].MaterialIndex;
+    result.DiffuseColor = materials[materialIndex].DiffuseColor;
+    uint diffuseTextureId = materials[materialIndex].DiffuseTextureId;
+    //float3 AmbientColor;
+    //float3 DiffuseColor;
+    //float3 SpecularColor;
+    //float  SpecularExponent;
+    //uint   DiffuseTextureId;
+
 
     result.Barycentric = GetBarycentric(modelIndex, i, modelToView, viewPos);
 
@@ -359,7 +386,17 @@ GBufferSample GetGBufferSample(uint visibility, float3 viewPos)
     float3 normal2 = vertexAttributes[modelIndex][i[2]].Normal;
 
     result.ViewPos    = viewPos;
-    result.ViewNormal = mul(normalize(normal0 * result.Barycentric[0] + normal1 * result.Barycentric[1] + normal2 * result.Barycentric[2]), (float3x3)modelToView);
+    result.ViewNormal = normalize(mul(normalize(normal0 * result.Barycentric[0] + normal1 * result.Barycentric[1] + normal2 * result.Barycentric[2]), (float3x3)modelToView));
+
+    if (diffuseTextureId != 0)
+    {
+        float2 uv =
+            vertexAttributes[modelIndex][i[0]].UV * result.Barycentric[0] +
+            vertexAttributes[modelIndex][i[1]].UV * result.Barycentric[1] +
+            vertexAttributes[modelIndex][i[2]].UV * result.Barycentric[2];
+
+        result.DiffuseColor *= textures[diffuseTextureId - 1].SampleLevel(defaultSampler, uv, 0); // TODO: Do MIPs properly
+    }
 
     return result;
 }
@@ -413,10 +450,10 @@ void ColorPass(uint3 pos : SV_DispatchThreadID)
 
                 GBufferSample gSample = GetGBufferSample(v, viewPos);
 
-                float3 albedo0 = float3(1, 1, 1);
-                float3 albedo1 = float3(1, 1, 1);
-                float3 albedo2 = float3(1, 1, 1);
-                float3 albedo3 = float3(1, 1, 1);
+                float3 albedo0 = gSample.DiffuseColor;
+                float3 albedo1 = gSample.DiffuseColor;
+                float3 albedo2 = gSample.DiffuseColor;
+                float3 albedo3 = gSample.DiffuseColor;
 
                 //albedo0.y *= totalWeights[0] / 8.0f;
                 //albedo1.y *= totalWeights[1] / 8.0f;

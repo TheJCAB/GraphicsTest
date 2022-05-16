@@ -3,6 +3,121 @@
 
 #include "Model.h"
 
+#include <gdiplus.h>
+
+TextureManager::TextureManager(RenderDevice& renderDevice)
+{
+    FirstSrv = renderDevice.srvDescriptorHeap.AllocateDescriptors(MAX_TEXTURES);
+}
+
+Texture::Id TextureManager::AllocateNewTexture(RenderDevice& renderDevice, AssetUploader& assetUploader, std::string_view pathName)
+{
+    if (auto const id = FindTexture(pathName))
+    {
+        return id;
+    }
+
+    struct GdiplusStartup
+    {
+        ULONG_PTR gdiplusToken = UINTPTR_MAX;
+        Gdiplus::GdiplusStartupInput gdiplusStartupInput;
+
+        GdiplusStartup()
+        {
+            Gdiplus::GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
+        }
+    };
+    static GdiplusStartup gdiplusStartup{};
+
+
+    // Warning! Sooper-cheesy char to wchar_t conversion!
+    std::unique_ptr<Gdiplus::Bitmap> bitmap{ new Gdiplus::Bitmap(std::wstring{pathName.begin(), pathName.end()}.c_str()) };
+    Gdiplus::SizeF size;
+    bitmap->GetPhysicalDimension(&size);
+    auto const width       = bitmap->GetWidth();
+    auto const height      = bitmap->GetHeight();
+    auto const pixelFormat = bitmap->GetPixelFormat();
+    Gdiplus::BitmapData bitmapData{};
+    Gdiplus::Rect const dimensions{ 0, 0, static_cast<INT>(width), static_cast<INT>(height) };
+    bitmap->LockBits(&dimensions, Gdiplus::ImageLockModeRead, PixelFormat32bppARGB, &bitmapData);
+
+    assert(TextureCount < TextureList.size());
+    auto const index = TextureCount;
+    auto const id = Texture::Id{ index + 1 };
+    ++TextureCount;
+
+    TextureList[index].Path = pathName;
+    TextureList[index].Resource = assetUploader.CreateStaticTexture(width, height, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
+        [&](uint32_t x, uint32_t y, uint32_t w, void* p)
+        {
+            auto const pSrc = reinterpret_cast<uint32_t const*>(reinterpret_cast<uintptr_t>(bitmapData.Scan0) + (height - 1 - y) * bitmapData.Stride + x * 4);
+            for (uint32_t i = 0; i < w; ++i)
+            {
+                reinterpret_cast<uint32_t*>(p)[i] = ((pSrc[i] >> 16) & 0xFF) | ((pSrc[i] & 0xFF) << 16) | (pSrc[i] & 0xFF00FF00);
+            }
+        }
+    );
+
+    bitmap->UnlockBits(&bitmapData);
+
+    renderDevice.UploadSrvDescriptor(FirstSrv + index, TextureList[index].Resource);
+
+    return id;
+}
+
+Texture::Id TextureManager::FindTexture(std::string_view pathName)
+{
+    std::filesystem::path path{ pathName };
+    for (uint32_t i = 0; i < TextureCount; ++i)
+    {
+        if (TextureList[i].Path == path)
+        {
+            return static_cast<Texture::Id>(i + 1);
+        }
+    }
+    return Texture::Id::Invalid;
+}
+
+
+MaterialManager::MaterialManager(RenderDevice& renderDevice)
+{
+    MaterialList = ConstantBuffer<MaterialParameters, MAX_MATERIAL_DEFINITIONS>::Create(renderDevice.device);
+    Srv = renderDevice.AllocateSrvDescriptor(MaterialList.pResource,
+        {
+            .Format                  = DXGI_FORMAT_UNKNOWN,
+            .ViewDimension           = D3D12_SRV_DIMENSION_BUFFER,
+            .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+            .Buffer                  { .NumElements = MAX_MATERIAL_DEFINITIONS, .StructureByteStride = sizeof(MaterialParameters) },
+        }
+    );
+}
+
+Material::Id MaterialManager::AllocateNewMaterial(RenderDevice& renderDevice, AssetUploader& assetUploader, TextureManager& textureManager, Material&& material)
+{
+    assert(MaterialCount < MaterialList.Get().size());
+    auto const index = MaterialCount;
+    auto const id = Material::Id{ index + 1 };
+    ++MaterialCount;
+
+    MaterialParameters& params = MaterialList[index];
+    params.AmbientColor     = material.AmbientColor;
+    params.DiffuseColor     = material.DiffuseColor;
+    params.SpecularColor    = material.SpecularColor;
+    params.SpecularExponent = material.SpecularExponent;
+    if (!material.DiffuseTexturePathName.empty())
+    {
+        params.DiffuseTexture = textureManager.AllocateNewTexture(renderDevice, assetUploader, material.DiffuseTexturePathName);
+    }
+    else
+    {
+        params.DiffuseTexture = Texture::Id::Invalid;
+    }
+
+    return id;
+}
+
+
+
 Model CreateModel(AssetUploader& uploader, RenderDevice& renderDevice, ModelTrianglesDefinition const& triangles, ModelVerticesDefinition const& vertices)
 {
     Model model{};
@@ -177,9 +292,10 @@ void UpdateStaticModelInstance(RenderDevice const& renderDevice, InstanceManager
 
     XMMATRIX const modelMatrix = XMMatrixRotationRollPitchYaw(instance.Pitch * (2.0f * XM_PI / 65536.0f), instance.Yaw * (2.0f * XM_PI / 65536.0f), instance.Roll * (2.0f * XM_PI / 65536.0));
 
+    XMMATRIX const scaling = XMMatrixScaling(instance.Scale, instance.Scale, instance.Scale);
     XMMATRIX const translation = XMMatrixTranslationFromVector(instance.Pos);
 
     auto& attributes = instanceManager.GetCurrentFrameInstanceAttributes(renderDevice, instanceId);
-    XMStoreFloat4x4(&attributes.View      , XMMatrixTranspose(modelMatrix * translation * View    ));
-    XMStoreFloat4x4(&attributes.Projection, XMMatrixTranspose(modelMatrix * translation * ViewProj));
+    XMStoreFloat4x4(&attributes.View      , XMMatrixTranspose(scaling * modelMatrix * translation * View    ));
+    XMStoreFloat4x4(&attributes.Projection, XMMatrixTranspose(scaling * modelMatrix * translation * ViewProj));
 };

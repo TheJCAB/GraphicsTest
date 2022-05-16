@@ -7,6 +7,7 @@
 #include <DirectXMath.h>
 
 #include <array>
+#include <span>
 #include <functional>
 
 
@@ -146,6 +147,7 @@ struct RenderDevice
 
     ComPtr<ID3D12GraphicsCommandList> CreateDirectCommandList(ComRef<ID3D12CommandAllocator>, ComRef<ID3D12PipelineState> = nullptr) const;
 
+    void UploadSrvDescriptor(UINT index, ComRef<ID3D12Resource>);
     void UploadSrvDescriptor(UINT index, ComRef<ID3D12Resource>, D3D12_SHADER_RESOURCE_VIEW_DESC const&);
     void UploadUavDescriptor(UINT index, ComRef<ID3D12Resource>, D3D12_UNORDERED_ACCESS_VIEW_DESC const&);
 
@@ -255,6 +257,25 @@ struct BufferDesc : D3D12_RESOURCE_DESC
     {}
 };
 
+struct Texture2DDesc : D3D12_RESOURCE_DESC
+{
+    Texture2DDesc(uint32_t const width, uint32_t const height, DXGI_FORMAT const format, D3D12_RESOURCE_FLAGS const flags = D3D12_RESOURCE_FLAG_NONE)
+        : D3D12_RESOURCE_DESC
+          {
+            .Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+            .Alignment        = 0,
+            .Width            = width,
+            .Height           = height,
+            .DepthOrArraySize = 1,
+            .MipLevels        = 1,
+            .Format           = format,
+            .SampleDesc       { .Count = 1, .Quality = 0 },
+            .Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN,
+            .Flags            = flags,
+          }
+    {}
+};
+
 constexpr D3D12_DEPTH_STENCILOP_DESC DefaultStencilOp
 {
     .StencilFailOp      = D3D12_STENCIL_OP_KEEP,
@@ -275,15 +296,16 @@ constexpr D3D12_DEPTH_STENCIL_DESC DefaultDepthStencilDesc
 
 ComPtr<ID3D12Resource> CreateUploadConstantBuffer(ComRef<ID3D12Device>, UINT size, D3D12_RESOURCE_STATES initState = D3D12_RESOURCE_STATE_GENERIC_READ);
 
-template < typename T >
+template < typename T, size_t Count = 1 >
 struct ConstantBuffer
 {
     ComPtr<ID3D12Resource> pResource;
-    T*                     pBuffer = nullptr;
+    std::span<T>           pBuffer{};
 
-    T* Get                         () const { return pBuffer; }
-    T* operator->                  () const { return pBuffer; }
-    operator T*                    () const { return pBuffer; }
+    std::span<T> Get               () const { return pBuffer; }
+    T* operator->                  () const { return pBuffer.data(); }
+    T& operator[]                  (size_t i) const { return pBuffer[i]; }
+    operator T*                    () const { return pBuffer.data; }
     operator ID3D12Resource*       () const { return pResource.Get(); }
     operator ComRef<ID3D12Resource>() const { return pResource.Get(); }
     explicit operator bool         () const { return pResource; }
@@ -299,16 +321,18 @@ constexpr UINT CalculateConstantBufferByteSize(UINT byteSize)
     return (byteSize + (D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT - 1)) & ~(D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT - 1);
 }
 
-template < typename T >
-inline ConstantBuffer<T> ConstantBuffer<T>::Create(ComRef<ID3D12Device>  device, D3D12_RESOURCE_STATES initState)
+template < typename T, size_t Count >
+inline ConstantBuffer<T, Count> ConstantBuffer<T, Count>::Create(ComRef<ID3D12Device>  device, D3D12_RESOURCE_STATES initState)
 {
-    ConstantBuffer<T> result{};
+    ConstantBuffer<T, Count> result{};
 
-    result.pResource = CreateUploadConstantBuffer(device, sizeof(T), initState);
+    result.pResource = CreateUploadConstantBuffer(device, sizeof(std::array<T, Count>), initState);
 
     // We don't unmap this until the app closes. Keeping buffer mapped for the lifetime of the resource is okay.
     D3D12_RANGE const readRange{ .Begin = 0, .End = 0 }; // We do not intend to read from this resource on the CPU.
-    ThrowIfFailed(result.pResource->Map(0, &readRange, reinterpret_cast<void**>(&result.pBuffer)));
+    T* pBuffer = nullptr;
+    ThrowIfFailed(result.pResource->Map(0, &readRange, reinterpret_cast<void**>(&pBuffer)));
+    result.pBuffer = std::span{ pBuffer, Count };
 
     return result;
 }
@@ -357,9 +381,9 @@ template < UINT base, UINT count = 1, UINT space = 0 > struct UavRange
     static constexpr D3D12_DESCRIPTOR_RANGE1 Range{ .RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV, .NumDescriptors = count, .BaseShaderRegister = base, .RegisterSpace = space, .OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
 };
 
-template < UINT base, UINT count = 1 > struct SamplerRange
+template < UINT base, UINT count = 1, UINT space = 0 > struct SamplerRange
 {
-    static constexpr D3D12_DESCRIPTOR_RANGE1 Range{ .RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, .NumDescriptors = count, .BaseShaderRegister = base, .OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
+    static constexpr D3D12_DESCRIPTOR_RANGE1 Range{ .RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, .NumDescriptors = count, .BaseShaderRegister = base, .RegisterSpace = space, .OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
 };
 
 
@@ -589,7 +613,8 @@ public:
 
     void HoldPendingObject(ComPtr<IUnknown>);
 
-    ComPtr<ID3D12Resource> CreateStaticBuffer(UINT size, D3D12_RESOURCE_STATES initialState, std::function<void(void*)> dataFill);
+    ComPtr<ID3D12Resource> CreateStaticBuffer (uint32_t size, D3D12_RESOURCE_STATES initialState, std::function<void(void*)> dataFill);
+    ComPtr<ID3D12Resource> CreateStaticTexture(uint32_t width, uint32_t height, D3D12_RESOURCE_STATES initialState, std::function<void(uint32_t x, uint32_t y, uint32_t w, void*)> dataFill);
 
 private:
     ComPtr<ID3D12Device>               m_device;

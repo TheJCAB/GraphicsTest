@@ -9,12 +9,13 @@ add_executable (GraphicsTest WIN32
 
 	JcabD3D.cpp         JcabD3D.h
 	Model.cpp           Model.h
+	ObjModel.cpp        ObjModel.h
 	Pipeline.cpp        Pipeline.h
 )
 
 target_compile_definitions(GraphicsTest PRIVATE UNICODE _UNICODE)
 
-target_link_libraries(GraphicsTest PRIVATE d3d12.lib dxgi.lib d3dcompiler.lib)
+target_link_libraries(GraphicsTest PRIVATE d3d12.lib dxgi.lib d3dcompiler.lib gdiplus.lib)
 
 set_property(TARGET GraphicsTest PROPERTY CXX_STANDARD 20)
 
