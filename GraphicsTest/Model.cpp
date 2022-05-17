@@ -47,7 +47,7 @@ Texture::Id TextureManager::AllocateNewTexture(RenderDevice& renderDevice, Asset
     ++TextureCount;
 
     TextureList[index].Path = pathName;
-    TextureList[index].Resource = assetUploader.CreateStaticTexture(width, height, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
+    TextureList[index].Resource = assetUploader.CreateStaticTexture(width, height, 0, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
         [&](uint32_t x, uint32_t y, uint32_t w, void* p)
         {
             auto const pSrc = reinterpret_cast<uint32_t const*>(reinterpret_cast<uintptr_t>(bitmapData.Scan0) + (height - 1 - y) * bitmapData.Stride + x * 4);

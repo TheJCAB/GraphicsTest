@@ -7,6 +7,7 @@
 #include "Pipeline.h"
 
 #include <shlobj.h>
+#include <hidusage.h>
 
 #include <array>
 #include <span>
@@ -175,18 +176,18 @@ Assets LoadAssets(RenderDevice& renderDevice)
         instance.Roll  = static_cast<uint16_t>(rand());
     }
 
-    //{
-    //    auto objModel = LoadObjModel(R"(X:\TEMP\mary-rose-a-wooden-tankard\source\maryRoseTankard.zip\MaryRoseTankard_100kMesh.obj)");
-    //    RecenterObjModelPositions(objModel, 50);
-    //    AddObjEdgesAndAdjacency  (objModel);
-    //    AddObjModelMissingNormals(objModel);
-    //
-    //    for (auto& model : UploadObjModel(objModel, *assets.textureManager, *assets.materialManager, uploader, renderDevice))
-    //    {
-    //        auto const modelId = assets.modelManager->AllocateNewModel(renderDevice, std::move(model));
-    //        assets.objModelInstances.push_back(assets.instanceManager->AllocateNewInstance(renderDevice, *assets.modelManager, Instance{modelId, 1.0f, XMVectorSet(-8, 0, 0, 0)}));
-    //    }
-    //}
+    {
+        auto objModel = LoadObjModel(R"(X:\TEMP\mary-rose-a-wooden-tankard\source\maryRoseTankard.zip\MaryRoseTankard_100kMesh.obj)");
+        RecenterObjModelPositions(objModel, 50);
+        AddObjEdgesAndAdjacency  (objModel);
+        AddObjModelMissingNormals(objModel);
+    
+        for (auto& model : UploadObjModel(objModel, *assets.textureManager, *assets.materialManager, uploader, renderDevice))
+        {
+            auto const modelId = assets.modelManager->AllocateNewModel(renderDevice, std::move(model));
+            assets.objModelInstances.push_back(assets.instanceManager->AllocateNewInstance(renderDevice, *assets.modelManager, Instance{modelId, 1.0f, XMVectorSet(-8, 0, 0, 0)}));
+        }
+    }
 
     //{
     //    auto objModel = LoadObjModel(R"(C:\Users\jcab\Downloads\ameise\source\Ameise_C\Ameise_C.obj)");
@@ -201,18 +202,18 @@ Assets LoadAssets(RenderDevice& renderDevice)
     //    }
     //}
 
-    {
-        auto objModel = LoadObjModel(R"(C:\Users\jcab\Downloads\San_Miguel\san-miguel-low-poly.obj)");
-        RecenterObjModelPositions(objModel, 1);
-        AddObjEdgesAndAdjacency  (objModel);
-        AddObjModelMissingNormals(objModel);
-    
-        for (auto& model : UploadObjModel(objModel, *assets.textureManager, *assets.materialManager, uploader, renderDevice))
-        {
-            auto const modelId = assets.modelManager->AllocateNewModel(renderDevice, std::move(model));
-            assets.objModelInstances.push_back(assets.instanceManager->AllocateNewInstance(renderDevice, *assets.modelManager, Instance{modelId, 1.0f, XMVectorSet(0, 0, 4, 6)}));
-        }
-    }
+    //{
+    //    auto objModel = LoadObjModel(R"(C:\Users\jcab\Downloads\San_Miguel\san-miguel-low-poly.obj)");
+    //    RecenterObjModelPositions(objModel, 1);
+    //    AddObjEdgesAndAdjacency  (objModel);
+    //    AddObjModelMissingNormals(objModel);
+    //
+    //    for (auto& model : UploadObjModel(objModel, *assets.textureManager, *assets.materialManager, uploader, renderDevice))
+    //    {
+    //        auto const modelId = assets.modelManager->AllocateNewModel(renderDevice, std::move(model));
+    //        assets.objModelInstances.push_back(assets.instanceManager->AllocateNewInstance(renderDevice, *assets.modelManager, Instance{modelId, 1.0f, XMVectorSet(0, 0, 4, 6)}));
+    //    }
+    //}
 
     //FILE* const f = fopen(, "r");
 
@@ -310,14 +311,70 @@ XMMATRIX XMMatrixInversePerspectiveFovInfiniteRH(float FovAngleY, float AspectRa
     return XMLoadFloat4x4(&M);
 }
 
+int32_t cameraYaw   = 0;
+int32_t cameraPitch = 0;
+XMVECTOR eye{};
+XMVECTOR cameraOrientation = XMQuaternionIdentity();
+
+bool g_movementZForward  = false;
+bool g_movementZBackward = false;
+bool g_movementXForward  = false;
+bool g_movementXBackward = false;
+bool g_movementYForward  = false;
+bool g_movementYBackward = false;
+
 // Prepare to render the next frame.
 void AnimateAssets(RenderDevice const& renderDevice, Assets const& assets)
 {
-    XMFLOAT3 const eye{ 0, 10, -10 };
-    XMFLOAT3 const at { 0, 0,  0 };
-    XMFLOAT3 const up { 0, 1,  0 };
+    if (g_movementZForward  ||
+        g_movementZBackward ||
+        g_movementXForward  ||
+        g_movementXBackward ||
+        g_movementYForward  ||
+        g_movementYBackward)
+    {
+        static constexpr XMFLOAT3 deltaX{ 0.1f, 0, 0 };
+        static constexpr XMFLOAT3 deltaY{ 0, 0.1f, 0 };
+        static constexpr XMFLOAT3 deltaZ{ 0, 0, 0.1f };
 
-    View = XMMatrixLookAtRH(XMLoadFloat3(&eye), XMLoadFloat3(&at), XMLoadFloat3(&up));
+        XMVECTOR delta{};
+        if (g_movementZForward ) delta += XMLoadFloat3(&deltaZ);
+        if (g_movementZBackward) delta -= XMLoadFloat3(&deltaZ);
+        if (g_movementXForward ) delta += XMLoadFloat3(&deltaX);
+        if (g_movementXBackward) delta -= XMLoadFloat3(&deltaX);
+        if (g_movementYForward ) delta += XMLoadFloat3(&deltaY);
+        if (g_movementYBackward) delta -= XMLoadFloat3(&deltaY);
+
+        eye += XMVector3TransformNormal(delta, InverseView);
+    }
+
+    
+    if (cameraPitch != 0 || cameraYaw != 0)
+    {
+        cameraOrientation = XMQuaternionNormalize(
+            XMQuaternionMultiply(
+                XMQuaternionRotationRollPitchYaw(0, cameraYaw * (XM_2PI / UINT32_MAX), 0),
+                XMQuaternionMultiply(
+                    cameraOrientation,
+                    XMQuaternionRotationRollPitchYaw(cameraPitch * (-XM_2PI / UINT32_MAX), 0, 0)
+                )
+            )
+        );
+        cameraPitch = 0;
+        cameraYaw   = 0;
+    }
+
+
+    //XMFLOAT3 const eye{ 0,10,-10 };
+    //XMFLOAT3 const at { 0, 0,  0 };
+    //XMFLOAT3 const up { 0, 1,  0 };
+    //
+    //View = XMMatrixLookAtRH(XMLoadFloat3(&eye), XMLoadFloat3(&at), XMLoadFloat3(&up));
+    View = 
+        XMMatrixTranslationFromVector(eye) *
+        XMMatrixRotationQuaternion(cameraOrientation);
+
+    InverseView = XMMatrixInverse(nullptr, View);
 
     float const fovAngleY = 90.0f;
     float const fovRadiansY = fovAngleY * XM_PI / 180.0f;
@@ -351,17 +408,89 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPara
         }
         return 0;
 
-    case WM_KEYDOWN:
-        switch (static_cast<UINT8>(wParam))
+    case WM_INPUT:
         {
-        case VK_SPACE:
-            g_animate = !g_animate;
-            break;
+            RAWINPUT raw{};
+            UINT dwSize = sizeof(raw);
+
+            GetRawInputData(reinterpret_cast<HRAWINPUT>(lParam), RID_INPUT, &raw, &dwSize, sizeof(raw.header));
+
+            if (raw.header.dwType == RIM_TYPEMOUSE) 
+            {
+                //int xPosRelative = raw.data.mouse.lLastX;
+                //int yPosRelative = raw.data.mouse.lLastY;
+                cameraYaw   += raw.data.mouse.lLastX * 0x100000;
+                cameraPitch += raw.data.mouse.lLastY * 0x100000;
+            }
+        }
+        return 0;
+
+    case WM_KEYDOWN:
+        {
+            switch (static_cast<UINT8>(wParam))
+            {
+            case VK_SPACE:
+                g_animate = !g_animate;
+                break;
+            case 'W':
+                g_movementZForward = true;
+                break;
+            case 'S':
+                g_movementZBackward = true;
+                break;
+            case 'A':
+                g_movementXForward = true;
+                break;
+            case 'D':
+                g_movementXBackward = true;
+                break;
+            case 'Q':
+                g_movementYForward = true;
+                break;
+            case 'E':
+                g_movementYBackward = true;
+                break;
+            }
         }
         // OnKeyDown(static_cast<UINT8>(wParam));
         return 0;
 
+    case WM_KILLFOCUS:
+        g_movementZForward  = false;
+        g_movementZBackward = false;
+        g_movementXForward  = false;
+        g_movementXBackward = false;
+        g_movementYForward  = false;
+        g_movementYBackward = false;
+        return 0;
+
     case WM_KEYUP:
+        {
+            switch (static_cast<UINT8>(wParam))
+            {
+            case VK_SPACE:
+                g_animate = !g_animate;
+                break;
+            case 'W':
+                g_movementZForward = false;
+                break;
+            case 'S':
+                g_movementZBackward = false;
+                break;
+            case 'A':
+                g_movementXForward = false;
+                break;
+            case 'D':
+                g_movementXBackward = false;
+                break;
+            case 'Q':
+                g_movementYForward = false;
+                break;
+            case 'E':
+                g_movementYBackward = false;
+                break;
+            }
+        }
         // OnKeyUp(static_cast<UINT8>(wParam));
         return 0;
 
@@ -444,6 +573,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
         hInstance,
         nullptr         // lParam
     );
+
+    RAWINPUTDEVICE const rid[]
+    {
+        {
+            .usUsagePage = HID_USAGE_PAGE_GENERIC,
+            .usUsage     = HID_USAGE_GENERIC_MOUSE,
+            .dwFlags     = RIDEV_INPUTSINK,
+            .hwndTarget  = hwnd,
+        }
+    };
+    RegisterRawInputDevices(&rid[0], std::size(rid), sizeof(rid));
 
     auto       renderDevice = RenderDevice::Create(hwnd);
     auto const assets       = LoadAssets(renderDevice);

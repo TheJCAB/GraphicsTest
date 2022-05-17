@@ -24,6 +24,7 @@ inline bool g_animate = false;
 
 
 inline XMMATRIX View;
+inline XMMATRIX InverseView;
 inline XMMATRIX Projection;
 inline XMMATRIX InverseProjection;
 inline XMMATRIX ViewProj;

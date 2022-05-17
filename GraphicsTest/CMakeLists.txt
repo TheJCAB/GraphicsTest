@@ -30,5 +30,6 @@ function(copy_hlsl_file TargetName File)
 endfunction()
 
 copy_hlsl_file(GraphicsTest model.hlsl)
+copy_hlsl_file(GraphicsTest JcabD3D.hlsl)
 
 # TODO: Add tests and install targets if needed.

@@ -395,7 +395,7 @@ GBufferSample GetGBufferSample(uint visibility, float3 viewPos)
             vertexAttributes[modelIndex][i[1]].UV * result.Barycentric[1] +
             vertexAttributes[modelIndex][i[2]].UV * result.Barycentric[2];
 
-        result.DiffuseColor *= textures[diffuseTextureId - 1].SampleLevel(defaultSampler, uv, 0); // TODO: Do MIPs properly
+        result.DiffuseColor *= textures[diffuseTextureId - 1].SampleLevel(defaultSampler, uv, 4); // TODO: Do MIPs properly
     }
 
     return result;

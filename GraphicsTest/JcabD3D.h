@@ -78,6 +78,8 @@ public:
     operator ComRef<ID3D12DescriptorHeap>() const { return heap.Get(); }
     explicit operator bool               () const { return heap; }
 
+    ComPtr<IUnknown> Extract() && { return std::move(heap); }
+
     static DescriptorHeap<type> Create(ComRef<ID3D12Device> device, UINT count, D3D12_DESCRIPTOR_HEAP_FLAGS flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE);
 
 private:
@@ -142,8 +144,8 @@ struct RenderDevice
 
     template < typename... args > ComPtr<ID3D12RootSignature> CreateRootSignature() const;
 
-    ComPtr<ID3D12PipelineState> Create(Pipeline::State const&);
-    ComPtr<ID3D12PipelineState> Create(Compute::State const&);
+    ComPtr<ID3D12PipelineState> Create(Pipeline::State const&) const;
+    ComPtr<ID3D12PipelineState> Create(Compute::State const&) const;
 
     ComPtr<ID3D12GraphicsCommandList> CreateDirectCommandList(ComRef<ID3D12CommandAllocator>, ComRef<ID3D12PipelineState> = nullptr) const;
 
@@ -259,7 +261,7 @@ struct BufferDesc : D3D12_RESOURCE_DESC
 
 struct Texture2DDesc : D3D12_RESOURCE_DESC
 {
-    Texture2DDesc(uint32_t const width, uint32_t const height, DXGI_FORMAT const format, D3D12_RESOURCE_FLAGS const flags = D3D12_RESOURCE_FLAG_NONE)
+    Texture2DDesc(uint32_t const width, uint32_t const height, uint32_t const mips, DXGI_FORMAT const format, D3D12_RESOURCE_FLAGS const flags = D3D12_RESOURCE_FLAG_NONE)
         : D3D12_RESOURCE_DESC
           {
             .Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D,
@@ -267,7 +269,7 @@ struct Texture2DDesc : D3D12_RESOURCE_DESC
             .Width            = width,
             .Height           = height,
             .DepthOrArraySize = 1,
-            .MipLevels        = 1,
+            .MipLevels        = static_cast<uint16_t>(mips),
             .Format           = format,
             .SampleDesc       { .Count = 1, .Quality = 0 },
             .Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN,
@@ -340,7 +342,8 @@ inline ConstantBuffer<T, Count> ConstantBuffer<T, Count>::Create(ComRef<ID3D12De
 
 inline void TransitionResource(ComRef<ID3D12GraphicsCommandList> commandList, ComRef<ID3D12Resource> resource, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to)
 {
-    D3D12_RESOURCE_BARRIER const barrier{
+    D3D12_RESOURCE_BARRIER const barrier
+    {
         .Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
         .Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE,
         .Transition{
@@ -352,6 +355,18 @@ inline void TransitionResource(ComRef<ID3D12GraphicsCommandList> commandList, Co
     };
     commandList->ResourceBarrier(1, &barrier);
 }
+
+inline void UavBarrier(ComRef<ID3D12GraphicsCommandList> commandList, ComRef<ID3D12Resource> resource)
+{
+    D3D12_RESOURCE_BARRIER const barrier
+    {
+        .Type  = D3D12_RESOURCE_BARRIER_TYPE_UAV,
+        .Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE,
+        .UAV   { .pResource = resource },
+    };
+    commandList->ResourceBarrier(1, &barrier);
+}
+
 
 class SinglePassCommandList
 {
@@ -602,6 +617,18 @@ struct State
 // namespace Compute
 
 
+class AssetUploader;
+
+struct MipGenerationPass
+{
+    ComPtr<ID3D12RootSignature> RootSignature;
+    ComPtr<ID3D12PipelineState> PipelineState;
+
+    MipGenerationPass(RenderDevice const&);
+
+    void Render(ComRef<ID3D12Device>, ComRef<ID3D12GraphicsCommandList>, AssetUploader&, ComRef<ID3D12Resource> uavTexture) const;
+};
+
 class AssetUploader
 {
 public:
@@ -614,7 +641,12 @@ public:
     void HoldPendingObject(ComPtr<IUnknown>);
 
     ComPtr<ID3D12Resource> CreateStaticBuffer (uint32_t size, D3D12_RESOURCE_STATES initialState, std::function<void(void*)> dataFill);
-    ComPtr<ID3D12Resource> CreateStaticTexture(uint32_t width, uint32_t height, D3D12_RESOURCE_STATES initialState, std::function<void(uint32_t x, uint32_t y, uint32_t w, void*)> dataFill);
+    ComPtr<ID3D12Resource> CreateStaticTexture(uint32_t width, uint32_t height, uint32_t mips, D3D12_RESOURCE_STATES initialState, std::function<void(uint32_t x, uint32_t y, uint32_t w, void*)> dataFill);
+
+    void GenerateMips(ComRef<ID3D12Resource> uavTexture)
+    {
+        m_mipGenerator.Render(m_device, m_commandList, *this, uavTexture);
+    }
 
 private:
     ComPtr<ID3D12Device>               m_device;
@@ -629,7 +661,9 @@ private:
         ComPtr<IUnknown> Object;
     };
 
-    std::vector<PendingObject> m_pendingObjects;
+    std::vector<PendingObject>         m_pendingObjects;
+
+    MipGenerationPass                  m_mipGenerator;
 };
 
 
@@ -700,3 +734,4 @@ CpuAccessibleBuffer<T>::CpuAccessibleBuffer(RenderDevice& renderDevice)
     D3D12_RANGE const readRange{ .Begin = 0, .End = 0 }; // We do not intend to read from this resource on the CPU.
     ThrowIfFailed(Buffer->Map(0, &readRange, reinterpret_cast<void**>(&pData)));
 }
+

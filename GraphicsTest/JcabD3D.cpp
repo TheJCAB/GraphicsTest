@@ -487,7 +487,7 @@ D3D12_SHADER_BYTECODE GetShaderBytecode(ComRef<ID3DBlob> const shader)
     }
 }
 
-ComPtr<ID3D12PipelineState> RenderDevice::Create(Pipeline::State const& state)
+ComPtr<ID3D12PipelineState> RenderDevice::Create(Pipeline::State const& state) const
 {
     ComPtr<ID3D12PipelineState> result;
 
@@ -529,7 +529,7 @@ ComPtr<ID3D12PipelineState> RenderDevice::Create(Pipeline::State const& state)
     return result;
 }
 
-ComPtr<ID3D12PipelineState> RenderDevice::Create(Compute::State const& state)
+ComPtr<ID3D12PipelineState> RenderDevice::Create(Compute::State const& state) const
 {
     ComPtr<ID3D12PipelineState> result;
 
@@ -614,30 +614,14 @@ ComPtr<ID3D12Resource> AssetUploader::CreateStaticBuffer(
 ComPtr<ID3D12Resource> AssetUploader::CreateStaticTexture(
     uint32_t                                                       width,
     uint32_t                                                       height,
+    uint32_t                                                       mips,
     D3D12_RESOURCE_STATES                                          initialState,
     std::function<void(uint32_t x, uint32_t y, uint32_t w, void*)> dataFill
 )
 {
     ComPtr<ID3D12Resource> texture;
 
-    Texture2DDesc desc{ width, height, DXGI_FORMAT_R8G8B8A8_UNORM }; // _SRGB
-
-    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
-    UINT   numRows        = 0;
-    UINT64 rowSizeInBytes = 0;
-    UINT64 totalBytes     = 0;
-    m_device->GetCopyableFootprints(&desc, 0, 1, 0, &footprint, &numRows, &rowSizeInBytes, &totalBytes);
-
-    auto uploadBuffer = CreateUploadBuffer(m_device, totalBytes);
-
-    // Copy the triangle data to the vertex buffer.
-    std::byte* p;
-    ThrowIfFailed(uploadBuffer->Map(0, &NullRange, reinterpret_cast<void**>(&p)));
-    for (UINT y = 0; y < numRows; ++y)
-    {
-        dataFill(0, y, footprint.Footprint.Width, p + footprint.Offset + y * footprint.Footprint.RowPitch);
-    }
-    uploadBuffer->Unmap(0, nullptr);
+    Texture2DDesc desc{ width, height, mips, DXGI_FORMAT_R8G8B8A8_UNORM }; // _SRGB
 
     ThrowIfFailed(m_device->CreateCommittedResource(
         &StaticBufferHeapProperties,
@@ -647,9 +631,40 @@ ComPtr<ID3D12Resource> AssetUploader::CreateStaticTexture(
         nullptr,
         IID_PPV_ARGS(&texture)));
 
+    auto const textureDesc = texture->GetDesc();
+
+    ComPtr<ID3D12Resource> uavTexture;
+    Texture2DDesc uavDesc{ width, height, textureDesc.MipLevels, DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS };
+    ThrowIfFailed(m_device->CreateCommittedResource(
+        &StaticBufferHeapProperties,
+        D3D12_HEAP_FLAG_NONE,
+        &uavDesc,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        nullptr,
+        IID_PPV_ARGS(&uavTexture)));
+
+    // Create an upload buffer for the first level.
+
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
+    UINT   numRows        = 0;
+    UINT64 rowSizeInBytes = 0;
+    UINT64 totalBytes     = 0;
+    m_device->GetCopyableFootprints(&uavDesc, 0, 1, 0, &footprint, &numRows, &rowSizeInBytes, &totalBytes);
+
+    auto uploadBuffer = CreateUploadBuffer(m_device, totalBytes);
+
+    // Copy the texture data to the first mip level.
+    std::byte* p;
+    ThrowIfFailed(uploadBuffer->Map(0, &NullRange, reinterpret_cast<void**>(&p)));
+    for (UINT y = 0; y < numRows; ++y)
+    {
+        dataFill(0, y, footprint.Footprint.Width, p + footprint.Offset + y * footprint.Footprint.RowPitch);
+    }
+    uploadBuffer->Unmap(0, nullptr);
+
     D3D12_TEXTURE_COPY_LOCATION const destLocation
     {
-        .pResource = texture.Get(),
+        .pResource = uavTexture.Get(),
         .Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
         .SubresourceIndex = 0,
     };
@@ -661,6 +676,14 @@ ComPtr<ID3D12Resource> AssetUploader::CreateStaticTexture(
     };
     m_commandList->CopyTextureRegion(&destLocation, 0, 0, 0, &srcLocation, nullptr);
 
+    TransitionResource(m_commandList, uavTexture, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    GenerateMips(uavTexture);
+
+    TransitionResource(m_commandList, uavTexture, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+
+    m_commandList->CopyResource(texture.Get(), uavTexture.Get());
+
     TransitionResource(m_commandList, texture, D3D12_RESOURCE_STATE_COPY_DEST, initialState);
 
     // Command lists are created in the recording state, but there is nothing
@@ -668,6 +691,7 @@ ComPtr<ID3D12Resource> AssetUploader::CreateStaticTexture(
     ThrowIfFailed(m_commandList->Close());
     ExecuteCommandList(m_queue, m_commandList);
     HoldPendingObject(std::move(uploadBuffer));
+    HoldPendingObject(std::move(uavTexture));
     ThrowIfFailed(m_commandList->Reset(m_allocator.Get(), nullptr));
 
     return texture;
@@ -676,12 +700,110 @@ ComPtr<ID3D12Resource> AssetUploader::CreateStaticTexture(
 
 
 
+MipGenerationPass::MipGenerationPass(RenderDevice const& renderDevice)
+{
+    // Create the rendering root signature.
+    RootSignature = renderDevice.CreateRootSignature<
+        Root::Constants<D3D12_SHADER_VISIBILITY_ALL, 0, 0, 2>,
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange    <0, 1>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange    <0, 1>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SamplerRange<0, 1>>,
+        Root::Flags<D3D12_ROOT_SIGNATURE_FLAG_NONE>
+    >();
+
+    // Create the pipeline state, which includes compiling and loading shaders.
+    PipelineState = renderDevice.Create(Compute::State
+        {
+            .RootSignature{ RootSignature },
+            .CS           = Compile(Shader{ L"JcabD3D.hlsl", "MipGenerationPass", "cs_5_1" }),
+        }
+    );
+}
+
+void MipGenerationPass::Render(ComRef<ID3D12Device> device, ComRef<ID3D12GraphicsCommandList> commandList, AssetUploader& uploader, ComRef<ID3D12Resource> uavTexture) const
+{
+    auto const desc = uavTexture->GetDesc();
+
+    auto descriptorHeap = DescriptorHeap<D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV>::Create(device, (desc.MipLevels - 1) * 2, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
+    auto samplerHeap    = DescriptorHeap<D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER    >::Create(device, 1                       , D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
+
+    commandList->SetComputeRootSignature(RootSignature.Get());
+    commandList->SetPipelineState       (PipelineState.Get());
+
+    auto const sampler = samplerHeap.AllocateDescriptors(1);
+
+    D3D12_SAMPLER_DESC const samplerDesc
+    {
+        .Filter         = D3D12_FILTER_MIN_MAG_MIP_LINEAR,
+        .AddressU       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+        .AddressV       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+        .AddressW       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+        .MipLODBias     = 0.0f,
+        .MaxAnisotropy  = 1,
+        .ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS,
+        .BorderColor    {},
+        .MinLOD         = 0,
+        .MaxLOD         = D3D12_FLOAT32_MAX,
+    };
+    device->CreateSampler(&samplerDesc, samplerHeap.GetCpuDescriptorHandle(sampler));
+
+    ID3D12DescriptorHeap* const heaps[]{ descriptorHeap, samplerHeap };
+    commandList->SetDescriptorHeaps(2, heaps);
+
+    commandList->SetComputeRootDescriptorTable(3, samplerHeap.GetGpuDescriptorHandle(sampler));
+
+    std::array<D3D12_PLACED_SUBRESOURCE_FOOTPRINT, D3D12_REQ_MIP_LEVELS> footprint{};
+
+    assert(desc.MipLevels <= footprint.size());
+
+    device->GetCopyableFootprints(&desc, 0, desc.MipLevels, 0, footprint.data(), nullptr, nullptr, nullptr);
+
+    for (uint32_t i = 1; i < desc.MipLevels; ++i)
+    {
+        uint32_t const constants[2]{ footprint[i].Footprint.Width, footprint[i].Footprint.Height };
+        commandList->SetComputeRoot32BitConstants(0, 2, &constants, 0);
+
+        auto const srv = descriptorHeap.AllocateDescriptors(2);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC const srvDesc
+        {
+            .Format                  = desc.Format,
+            .ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D,
+            .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+            .Texture2D               { .MostDetailedMip = i - 1, .MipLevels = 1 },
+        };
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC const uavDesc
+        {
+            .Format        = desc.Format,
+            .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D,
+            .Texture2D     { .MipSlice = i },
+        };
+
+        device->CreateShaderResourceView (uavTexture,          &srvDesc, descriptorHeap.GetCpuDescriptorHandle(srv    ));
+        device->CreateUnorderedAccessView(uavTexture, nullptr, &uavDesc, descriptorHeap.GetCpuDescriptorHandle(srv + 1));
+
+        commandList->SetComputeRootDescriptorTable(1, descriptorHeap.GetGpuDescriptorHandle(srv    ));
+        commandList->SetComputeRootDescriptorTable(2, descriptorHeap.GetGpuDescriptorHandle(srv + 1));
+
+        commandList->Dispatch((footprint[i].Footprint.Width + 7) / 8, (footprint[i].Footprint.Height + 7) / 8, 1);
+
+		UavBarrier(commandList, uavTexture);
+    }
+
+    uploader.HoldPendingObject(std::move(descriptorHeap).Extract());
+    uploader.HoldPendingObject(std::move(samplerHeap   ).Extract());
+}
+
+
+
 AssetUploader::AssetUploader(RenderDevice const& renderDevice)
-    : m_device     { renderDevice.device }
-    , m_queue      { renderDevice.commandQueue }
-    , m_allocator  { renderDevice.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }
-    , m_commandList{ renderDevice.CreateDirectCommandList(m_allocator) }
-    , m_fence      { renderDevice.device, renderDevice.commandQueue }
+    : m_device      { renderDevice.device }
+    , m_queue       { renderDevice.commandQueue }
+    , m_allocator   { renderDevice.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }
+    , m_commandList { renderDevice.CreateDirectCommandList(m_allocator) }
+    , m_fence       { renderDevice.device, renderDevice.commandQueue }
+    , m_mipGenerator{ renderDevice }
 {}
 
 AssetUploader::~AssetUploader()
