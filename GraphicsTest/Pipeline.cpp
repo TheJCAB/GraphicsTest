@@ -169,6 +169,9 @@ void MsaaGatherPass::Render(RenderDevice const& renderDevice, ModelManager const
     renderDevice.commandList->SetComputeRootDescriptorTable   (3, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(assets.MsaaSampleBufferUav));
 
     renderDevice.commandList->Dispatch((renderDevice.Width + 31) / 32, (renderDevice.Height + 15) / 16, 1);
+
+    UavBarrier(renderDevice.commandList, assets.MsaaSampleCountBuffer);
+    UavBarrier(renderDevice.commandList, assets.MsaaSampleBuffer);
 }
 
 
@@ -209,6 +212,8 @@ void ComputableGatherPass::Render(RenderDevice const& renderDevice, ModelManager
     renderDevice.commandList->SetComputeRootDescriptorTable   (4, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(assets.MsaaSampleBufferUav));
 
     renderDevice.commandList->Dispatch((renderDevice.Width + 31) / 32, (renderDevice.Height + 15) / 16, 1);
+
+    UavBarrier(renderDevice.commandList, assets.ComputableSampleBuffer);
 }
 
 
@@ -271,6 +276,8 @@ void ColorPass::Render(RenderDevice const& renderDevice, TextureManager const& t
     renderDevice.commandList->SetComputeRootDescriptorTable(13, renderDevice.samplerDescriptorHeap.GetGpuDescriptorHandle(0)); // TODO Samplers
 
     renderDevice.commandList->Dispatch((renderDevice.Width + 63) / 64, (renderDevice.Height + 15) / 16, 1);
+
+    UavBarrier(renderDevice.commandList, assets.ColorBuffer.Resource);
 }
 
 
@@ -308,6 +315,8 @@ void PostprocessPass::Render(RenderDevice const& renderDevice, RenderPipelineAss
     renderDevice.commandList->SetComputeRootDescriptorTable   (2, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(assets.ColorBufferUav));
 
     renderDevice.commandList->Dispatch((renderDevice.Width + 7) / 8, (renderDevice.Height + 7) / 8, 1);
+
+    UavBarrier(renderDevice.commandList, assets.ColorBuffer.Resource);
 }
 
 
