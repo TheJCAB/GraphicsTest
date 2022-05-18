@@ -317,7 +317,8 @@ ResolvePass::ResolvePass(RenderDevice& renderDevice)
 {
     // Create the rendering root signature.
     RootSignature = renderDevice.CreateRootSignature<
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<2, 1, 0>>
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<2, 1, 0>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<2, 2, 0>>
     >();
 
     // Create the pipeline state, which includes compiling and loading shaders.
@@ -345,6 +346,7 @@ void ResolvePass::Render(RenderDevice const& renderDevice, RenderPipelineAssets 
     renderDevice.commandList->SetDescriptorHeaps(1, heaps);
 
     renderDevice.commandList->SetGraphicsRootDescriptorTable(0, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(assets.ColorBuffer.SrvDescriptorIndex));
+    renderDevice.commandList->SetGraphicsRootDescriptorTable(1, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(assets.MsaaSampleBufferUav));
 
     renderDevice.commandList->DrawInstanced(3, 1, 0, 0);
 }

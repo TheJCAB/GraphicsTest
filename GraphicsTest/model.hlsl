@@ -164,12 +164,6 @@ struct MsaaSample
     uint  SampleMask; // 32 bits (1 per sample)
 };
 
-struct MsaaQuad
-{
-    uint       SampleCount;
-    MsaaSample SampleList[4];
-};
-
 RWStructuredBuffer<MsaaSample> msaaBuffer : register(u2, space0);
 RWStructuredBuffer<uint> msaaSampleCountBuffer : register(u3, space0);
 
@@ -276,6 +270,29 @@ struct ComputableSample
 
 RWStructuredBuffer<ComputableSample> computableBuffer : register(u1, space0);
 
+float3 CalculateViewPosForQuad(uint2 quadPos, uint sampleMask)
+{
+    float3 viewPos = float3(0, 0, 0);
+    uint s = 0;
+    float posWeight = 0;
+    while (sampleMask != 0)
+    {
+        while ((sampleMask & 1) == 0)
+        {
+            ++s;
+            sampleMask >>= 1;
+        }
+
+        uint2 samplePixel = GetSamplePixel(s);
+        viewPos += GetSampleViewPos(quadPos, s);
+        posWeight += 1;
+        ++s;
+        sampleMask >>= 1;
+    }
+
+    return viewPos / posWeight;
+}
+
 [numthreads(32 / PSamplesX, 16 / PSamplesY, 1)]
 void ComputableGatherPass(uint3 pos : SV_DispatchThreadID, uint tindex : SV_GroupIndex)
 {
@@ -296,25 +313,7 @@ void ComputableGatherPass(uint3 pos : SV_DispatchThreadID, uint tindex : SV_Grou
         }
         else
         {
-            float3 viewPos = float3(0, 0, 0);
-            uint s = 0;
-            float posWeight = 0;
-            while (mask != 0)
-            {
-                while ((mask & 1) == 0)
-                {
-                    ++s;
-                    mask >>= 1;
-                }
-
-                uint2 samplePixel = GetSamplePixel(s);
-                viewPos += GetSampleViewPos(pos.xy, s);
-                posWeight += 1;
-                ++s;
-                mask >>= 1;
-            }
-
-            viewPos /= posWeight;
+            float3 viewPos = CalculateViewPosForQuad(pos.xy, mask);
 
             // screen coordinates with 4 bits of fractional: uint2 normalizedScreenPos = floor(((viewPos.xy / viewPos.z) * ProjectionScale + ProjectionBias) * 16),
             uint2 normalizedScreenPos = floor(((viewPos.xy / viewPos.z) * NormalizedProjectionScale + NormalizedProjectionBias) * 65535.0f); // Normalized screen coordinates (resolution independent)
@@ -462,8 +461,7 @@ void ColorPass(uint3 pos : SV_DispatchThreadID)
     {
         for (int i = 0; i < numSamples; ++i)
         {
-            MsaaSample       msample = msaaBuffer      [i * NumQuads + computableIndex];
-            ComputableSample csample = computableBuffer[i * NumQuads + computableIndex];
+            MsaaSample msample = msaaBuffer[i * NumQuads + computableIndex];
             float4 weights = (float4)DecodeWeights(msample.SampleMask) + 0.01f;
             uint v = msample.Visibility;
             if (v == 0)
@@ -475,6 +473,9 @@ void ColorPass(uint3 pos : SV_DispatchThreadID)
             }
             else
             {
+                // Could calculate this right here...
+                //float3 viewPos = CalculateViewPosForQuad(pos.xy, msample.SampleMask);
+                ComputableSample csample = computableBuffer[i * NumQuads + computableIndex];
                 float3 viewPos = DecodeViewPos(csample.ScreenPos, csample.Depth);
 
                 GBufferSample gSample = GetGBufferSample(v, viewPos);
@@ -630,19 +631,47 @@ float4 ResolveVS(uint index : SV_VertexID) : SV_Position
 float4 ResolvePS(float4 position : SV_Position) : SV_Target
 {
     uint2 pos = floor(position.xy);
+    uint2 posNeighborX = uint2(pos.x & 1 ? pos.x + 1 : pos.x - 1, pos.y);
+    uint2 posNeighborY = uint2(pos.x, pos.y & 1 ? pos.y + 1 : pos.y - 1);
+
     // Since we're rendering in quads, we can see some pixelation on quad boundaries, so we apply a small filter across the quad boundary.
     // If the difference within the quad is much smaller than the difference with the next quad,
     // we'll push the color a tad towards the next quad's color.
     // We do this in both cartesian directions.
-    float factor = 0.2f;
-    float4 pixelColor     = colorMap[pos];
-    float4 oppositeColorX = colorMap[pos ^ uint2(1, 0)];
-    float4 oppositeColorY = colorMap[pos ^ uint2(0, 1)];
-    float4 neighborColorX = colorMap[uint2(pos.x & 1 ? pos.x + 1 : pos.x - 1, pos.y)];
-    float4 neighborColorY = colorMap[uint2(pos.x, pos.y & 1 ? pos.y + 1 : pos.y - 1)];
-    float4 x = (1 - abs(pixelColor - oppositeColorX)) * abs(pixelColor - neighborColorX) * factor;
-    float4 y = (1 - abs(pixelColor - oppositeColorY)) * abs(pixelColor - neighborColorY) * factor;
-    pixelColor = pixelColor * (1 - x - y + x * y) + neighborColorX * (x - 0.5f * x * y) + neighborColorX * (y - 0.5f * x * y);
+    uint2 qpos = pos / 2;
+    uint2 qposX = posNeighborX / 2;
+    uint2 qposY = posNeighborY / 2;
+    uint computableIndex  = qpos .x + qpos .y * NumQuadsX;
+    uint computableIndexX = qposX.x + qposX.y * NumQuadsX;
+    uint computableIndexY = qposY.x + qposY.y * NumQuadsX;
+
+    float4 pixelColor = colorMap[pos];
+
+    if (msaaSampleCountBuffer[computableIndex] == 1)
+    {
+        uint visibility = msaaBuffer[computableIndex].Visibility;
+        float4 mixedColor = pixelColor;
+        if (msaaSampleCountBuffer[computableIndexX] == 1)
+        {
+            if (visibility == msaaBuffer[computableIndexX].Visibility)
+            {
+                float4 oppositeColorX = colorMap[pos ^ uint2(1, 0)];
+                float4 neighborColorX = colorMap[posNeighborX];
+                mixedColor += (oppositeColorX + neighborColorX - 2.0f * pixelColor) / 3.0f;
+            }
+        }
+        if (msaaSampleCountBuffer[computableIndexY] == 1)
+        {
+            if (visibility == msaaBuffer[computableIndexY].Visibility)
+            {
+                float4 oppositeColorY = colorMap[pos ^ uint2(0, 1)];
+                float4 neighborColorY = colorMap[posNeighborY];
+                mixedColor += (oppositeColorY + neighborColorY - 2.0f * pixelColor) / 3.0f;
+            }
+        }
+        pixelColor = clamp(mixedColor, 0, 1);
+    }
+
     return LinearToGamma(
         pixelColor
         /*
