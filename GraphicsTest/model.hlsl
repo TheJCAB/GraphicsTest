@@ -1,38 +1,12 @@
 
+
+// Static Model data, available throughout.
+
 // Shared with the shader.
 #define MAX_MODEL_DEFINITIONS     100
 #define MAX_INSTANCE_DEFINITIONS 1000
 #define MAX_MATERIAL_DEFINITIONS 1000
 #define MAX_TEXTURES             1000
-
-struct InstanceAttributes
-{
-    float4x4 View;
-    float4x4 Projection;
-    uint     ModelIndex;
-    uint3    Padding;
-};
-
-cbuffer RootConstants : register(b0)
-{
-    uint instanceIndex;
-};
-
-StructuredBuffer<InstanceAttributes> instanceList : register(t0, space0);
-
-float4 VisibilityVS(float3 position : SV_Position) : SV_Position
-{
-    return mul(float4(position, 1), instanceList[instanceIndex].Projection);
-}
-
-uint VisibilityPS(uint triangleId : SV_PrimitiveID) : SV_Target
-{
-    return triangleId | ((instanceIndex + 1) << 20);
-}
-
-
-
-
 
 struct VertexAttributes
 {
@@ -57,23 +31,77 @@ struct MaterialParameters
     uint   DiffuseTextureId;
 };
 
-
-struct SceneConstants
-{
-    float4x4 InverseProjection;
-};
-
-ConstantBuffer<SceneConstants> sceneConstants : register(b0);
-
-Texture2DMS<uint>  visibilityMap : register(t1, space0);
-Texture2DMS<float> depthMap      : register(t2, space0);
-
 Buffer<uint3>                         indices         [MAX_MODEL_DEFINITIONS] : register(t1, space1);
 StructuredBuffer<TriangleParameters>  triangleParams  [MAX_MODEL_DEFINITIONS] : register(t1, space2);
 StructuredBuffer<float3>              vertexPositions [MAX_MODEL_DEFINITIONS] : register(t1, space3);
 StructuredBuffer<VertexAttributes>    vertexAttributes[MAX_MODEL_DEFINITIONS] : register(t1, space4);
 Texture2D<float4>                     textures        [MAX_TEXTURES         ] : register(t1, space5);
 StructuredBuffer<MaterialParameters>  materials                               : register(t0, space5);
+
+
+
+
+
+struct SceneConstants
+{
+    uint2  Size;
+
+    // ViewPos.xy / z projected into [0..width, 0..height] screen space
+    float2 ProjectionScale;
+    float2 ProjectionBias ;
+
+    float2 InverseProjectionScale;
+    float2 InverseProjectionBias ;
+
+    // ViewPos.xy / z projected into [0..1, 0..1] normalized space
+    float2 NormalizedProjectionScale;
+    float2 NormalizedProjectionBias ;
+
+    float2 InverseNormalizedProjectionScale;
+    float2 InverseNormalizedProjectionBias ;
+
+    float2 InverseAspectRatio;
+    float2 AspectRatio       ;
+};
+
+ConstantBuffer<SceneConstants> sceneConstants : register(b0);
+
+
+
+
+struct InstanceAttributes
+{
+    float4x4 View;
+    float4x4 Projection;
+    uint     ModelIndex;
+    uint3    Padding;
+};
+
+cbuffer VisibilityPassRootConstants : register(b0, space1)
+{
+    uint InstanceIndex;
+};
+
+StructuredBuffer<InstanceAttributes> instanceList : register(t0, space0);
+
+float4 VisibilityVS(float3 position : SV_Position) : SV_Position
+{
+    return mul(float4(position, 1), instanceList[InstanceIndex].Projection);
+}
+
+uint VisibilityPS(uint triangleId : SV_PrimitiveID) : SV_Target
+{
+    return triangleId | ((InstanceIndex + 1) << 20);
+}
+
+
+
+
+
+
+Texture2DMS<uint>  visibilityMap : register(t1, space0);
+Texture2DMS<float> depthMap      : register(t2, space0);
+
 
 RWTexture2D<float4> colorUav : register(u0, space0);
 
@@ -112,28 +140,11 @@ float GetDepth(uint2 pos, uint s)
     return depthMap.sample[GetVisibilitySample(s)][GetVisibilityPos(pos, s)];
 }
 
-// ViewPos.xy / z projected into [0..1280, 0..720] screen space
-static const float2 ProjectionScale = float2( -720.0f / 2.0f,  720.0f / 2.0f);
-static const float2 ProjectionBias  = float2( 1280.0f / 2.0f,  720.0f / 2.0f);
-
-static const float2 InverseProjectionScale = float2(   -2.0f / 720.0f,  2.0f / 720.0f);
-static const float2 InverseProjectionBias  = float2( 1280.0f / 720.0f, -1.0f);
-
-// ViewPos.xy / z projected into [0..1, 0..1] normalized space
-static const float2 NormalizedProjectionScale = float2( 720.0f / (1280.0f * 2.0f), -1.0f / 2.0f);
-static const float2 NormalizedProjectionBias  = float2( 1.0f / 2.0f,  1.0f / 2.0f);
-
-static const float2 InverseNormalizedProjectionScale = float2( (1280.0f * 2.0f) / 720.0f, -2.0f);
-static const float2 InverseNormalizedProjectionBias  = float2(-1280.0f          / 720.0f,  1.0f);
-
-static const float2 InverseAspectRatio = float2(720.0f / 1280.0f, -1.0f);
-static const float2 AspectRatio        = float2(1280.0f / 720.0f, -1.0f);
-
 float3 GetSampleViewPos(uint2 pos, int s)
 {
     float depth = -0.0001f / GetDepth(pos, s);
     float2 spos = GetVisibilityPos(pos, s) + 0.5 + visibilityMap.GetSamplePosition(GetVisibilitySample(s));
-    return float3((spos * InverseProjectionScale + InverseProjectionBias) * depth, depth);
+    return float3((spos * sceneConstants.InverseProjectionScale + sceneConstants.InverseProjectionBias) * depth, depth);
 }
 
 float3 GetBarycentric(uint modelIndex, uint3 indices, float4x4 modelToView, float3 viewPos)
@@ -154,9 +165,9 @@ float3 GetBarycentric(uint modelIndex, uint3 indices, float4x4 modelToView, floa
     return bary / dot(bary, 1);
 }
 
-static const uint NumQuadsX = 1280 / PSamplesX;
-static const uint NumQuadsY = 720 / PSamplesY;
-static const uint NumQuads = 1280 * 720 / PSamples;
+uint NumQuadsX() { return sceneConstants.Size.x                         / PSamplesX; }
+uint NumQuadsY() { return sceneConstants.Size.y                         / PSamplesY; }
+uint NumQuads () { return sceneConstants.Size.x * sceneConstants.Size.y / PSamples ; }
 
 struct MsaaSample
 {
@@ -249,7 +260,7 @@ void MsaaGatherPass(uint3 pos : SV_DispatchThreadID, uint tindex : SV_GroupIndex
         numSamples = i;
     }
 
-    uint quadIndex = pos.x + pos.y * NumQuadsX;
+    uint quadIndex = pos.x + pos.y * NumQuadsX();
 
     msaaSampleCountBuffer[quadIndex] = numSamples;
 
@@ -258,7 +269,7 @@ void MsaaGatherPass(uint3 pos : SV_DispatchThreadID, uint tindex : SV_GroupIndex
         MsaaSample result;
         result.Visibility = visibilityList[i].x;
         result.SampleMask = visibilityList[i].y;
-        msaaBuffer[i * NumQuads + quadIndex] = result;
+        msaaBuffer[i * NumQuads() + quadIndex] = result;
     }
 }
 
@@ -296,7 +307,7 @@ float3 CalculateViewPosForQuad(uint2 quadPos, uint sampleMask)
 [numthreads(32 / PSamplesX, 16 / PSamplesY, 1)]
 void ComputableGatherPass(uint3 pos : SV_DispatchThreadID, uint tindex : SV_GroupIndex)
 {
-    uint quadIndex = pos.x + pos.y * NumQuadsX;
+    uint quadIndex = pos.x + pos.y * NumQuadsX();
 
     uint numSamples = msaaSampleCountBuffer[quadIndex];
 
@@ -304,8 +315,8 @@ void ComputableGatherPass(uint3 pos : SV_DispatchThreadID, uint tindex : SV_Grou
     {
         ComputableSample result;
 
-        uint v    = msaaBuffer[i * NumQuads + quadIndex].Visibility;
-        uint mask = msaaBuffer[i * NumQuads + quadIndex].SampleMask;
+        uint v    = msaaBuffer[i * NumQuads() + quadIndex].Visibility;
+        uint mask = msaaBuffer[i * NumQuads() + quadIndex].SampleMask;
         if (v == 0)
         {
             result.ScreenPos = 0; // TODO: calculate from pos.xy
@@ -315,20 +326,20 @@ void ComputableGatherPass(uint3 pos : SV_DispatchThreadID, uint tindex : SV_Grou
         {
             float3 viewPos = CalculateViewPosForQuad(pos.xy, mask);
 
-            // screen coordinates with 4 bits of fractional: uint2 normalizedScreenPos = floor(((viewPos.xy / viewPos.z) * ProjectionScale + ProjectionBias) * 16),
-            uint2 normalizedScreenPos = floor(((viewPos.xy / viewPos.z) * NormalizedProjectionScale + NormalizedProjectionBias) * 65535.0f); // Normalized screen coordinates (resolution independent)
+            // screen coordinates with 4 bits of fractional: uint2 normalizedScreenPos = floor(((viewPos.xy / viewPos.z) * sceneConstants.ProjectionScale + sceneConstants.ProjectionBias) * 16),
+            uint2 normalizedScreenPos = floor(((viewPos.xy / viewPos.z) * sceneConstants.NormalizedProjectionScale + sceneConstants.NormalizedProjectionBias) * 65535.0f); // Normalized screen coordinates (resolution independent)
 
             result.ScreenPos  = normalizedScreenPos.x | (normalizedScreenPos.y << 16);
             result.Depth      = viewPos.z;
         }
 
-        computableBuffer[i * NumQuads + quadIndex] = result;
+        computableBuffer[i * NumQuads() + quadIndex] = result;
     }
 }
 
 float3 DecodeViewPos(uint pos, float depth)
 {
-    float2 spos = ((float2)(uint2(pos, pos >> 16) & 0xFFFF) / 65535.5f) * InverseNormalizedProjectionScale + InverseNormalizedProjectionBias;
+    float2 spos = ((float2)(uint2(pos, pos >> 16) & 0xFFFF) / 65535.5f) * sceneConstants.InverseNormalizedProjectionScale + sceneConstants.InverseNormalizedProjectionBias;
     return float3(spos * depth, depth);
 }
 
@@ -389,12 +400,12 @@ GBufferSample GetGBufferSample(uint visibility, float3 viewPos)
     result.ViewPos    = viewPos;
     result.ViewNormal = normalize(mul(normalize(normal0 * result.Barycentric[0] + normal1 * result.Barycentric[1] + normal2 * result.Barycentric[2]), (float3x3)modelToView));
 
-    float2 sPos    = (viewPos.xy / viewPos.z) * ProjectionScale + ProjectionBias;
+    float2 sPos    = (viewPos.xy / viewPos.z) * sceneConstants.ProjectionScale + sceneConstants.ProjectionBias;
     float2 sPos_dx = sPos + float2(1.0f, 0.0f);
     float2 sPos_dy = sPos + float2(0.0f, 1.0f);
 
-    float3 zViewPos_dx = float3((sPos_dx * InverseProjectionScale + InverseProjectionBias) * viewPos.z, viewPos.z);
-    float3 zViewPos_dy = float3((sPos_dy * InverseProjectionScale + InverseProjectionBias) * viewPos.z, viewPos.z);
+    float3 zViewPos_dx = float3((sPos_dx * sceneConstants.InverseProjectionScale + sceneConstants.InverseProjectionBias) * viewPos.z, viewPos.z);
+    float3 zViewPos_dy = float3((sPos_dy * sceneConstants.InverseProjectionScale + sceneConstants.InverseProjectionBias) * viewPos.z, viewPos.z);
 
     float3 viewPos_dx = zViewPos_dx * (dot(viewPos, result.ViewNormal) / dot(zViewPos_dx, result.ViewNormal));
     float3 viewPos_dy = zViewPos_dy * (dot(viewPos, result.ViewNormal) / dot(zViewPos_dy, result.ViewNormal));
@@ -447,7 +458,7 @@ void ColorPass(uint3 pos : SV_DispatchThreadID)
 {
     float4x4 color = 0;
 
-    uint computableIndex = pos.x + pos.y * NumQuadsX;
+    uint computableIndex = pos.x + pos.y * NumQuadsX();
 
     uint numSamples = msaaSampleCountBuffer[computableIndex];
 
@@ -455,13 +466,13 @@ void ColorPass(uint3 pos : SV_DispatchThreadID)
     uint4 totalWeights = 0;
     [unroll(4)] for (uint k = 0; k < numSamples; ++k)
     {
-        totalWeights += DecodeWeights(msaaBuffer[k * NumQuads + computableIndex].SampleMask);
+        totalWeights += DecodeWeights(msaaBuffer[k * NumQuads() + computableIndex].SampleMask);
     }
 
     {
         for (int i = 0; i < numSamples; ++i)
         {
-            MsaaSample msample = msaaBuffer[i * NumQuads + computableIndex];
+            MsaaSample msample = msaaBuffer[i * NumQuads() + computableIndex];
             float4 weights = (float4)DecodeWeights(msample.SampleMask) + 0.01f;
             uint v = msample.Visibility;
             if (v == 0)
@@ -475,7 +486,7 @@ void ColorPass(uint3 pos : SV_DispatchThreadID)
             {
                 // Could calculate this right here...
                 //float3 viewPos = CalculateViewPosForQuad(pos.xy, msample.SampleMask);
-                ComputableSample csample = computableBuffer[i * NumQuads + computableIndex];
+                ComputableSample csample = computableBuffer[i * NumQuads() + computableIndex];
                 float3 viewPos = DecodeViewPos(csample.ScreenPos, csample.Depth);
 
                 GBufferSample gSample = GetGBufferSample(v, viewPos);
@@ -641,9 +652,9 @@ float4 ResolvePS(float4 position : SV_Position) : SV_Target
     uint2 qpos = pos / 2;
     uint2 qposX = posNeighborX / 2;
     uint2 qposY = posNeighborY / 2;
-    uint computableIndex  = qpos .x + qpos .y * NumQuadsX;
-    uint computableIndexX = qposX.x + qposX.y * NumQuadsX;
-    uint computableIndexY = qposY.x + qposY.y * NumQuadsX;
+    uint computableIndex  = qpos .x + qpos .y * NumQuadsX();
+    uint computableIndexX = qposX.x + qposX.y * NumQuadsX();
+    uint computableIndexY = qposY.x + qposY.y * NumQuadsX();
 
     float4 pixelColor = colorMap[pos];
 

@@ -141,7 +141,7 @@ template class DescriptorHeap<D3D12_DESCRIPTOR_HEAP_TYPE_DSV        >;
 
 
 // Load the rendering pipeline dependencies.
-RenderDevice RenderDevice::Create(HWND const hwnd)
+RenderDevice RenderDevice::Create(HWND const hwnd, uint32_t const width, uint32_t const height)
 {
     RenderDevice renderDevice{};
 
@@ -181,10 +181,13 @@ RenderDevice RenderDevice::Create(HWND const hwnd)
     renderDevice.commandList = renderDevice.CreateDirectCommandList(renderDevice.assetsCommandAllocator);
     ThrowIfFailed(renderDevice.commandList->Close());
 
+    renderDevice.Width  = width;
+    renderDevice.Height = height;
+
     // Describe and create the swap chain.
     DXGI_SWAP_CHAIN_DESC1 swapChainDesc{
-        .Width       = 1280,
-        .Height      = 720,
+        .Width       = width,
+        .Height      = height,
         .Format      = DXGI_FORMAT_R8G8B8A8_UNORM,
         .SampleDesc  { .Count = 1 },
         .BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT | DXGI_USAGE_SHADER_INPUT,
@@ -209,8 +212,8 @@ RenderDevice RenderDevice::Create(HWND const hwnd)
     // This sample does not support fullscreen transitions.
     ThrowIfFailed(factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER));
 
-    renderDevice.viewport    = D3D12_VIEWPORT{ 0, 0, 1280, 720, D3D12_MIN_DEPTH, D3D12_MAX_DEPTH };
-    renderDevice.scissorRect = D3D12_RECT    { 0, 0, 1280, 720 };
+    renderDevice.viewport    = D3D12_VIEWPORT{ 0, 0, static_cast<float>(width), static_cast<float>(height), D3D12_MIN_DEPTH, D3D12_MAX_DEPTH };
+    renderDevice.scissorRect = D3D12_RECT    { 0, 0, static_cast<LONG >(width), static_cast<LONG >(height) };
 
     // Create descriptor heaps.
     renderDevice.rtvDescriptorHeap     = renderDevice.rtvDescriptorHeap    .Create(renderDevice.device.Get(),    10);
@@ -291,7 +294,7 @@ ComPtr<ID3D12CommandAllocator> RenderDevice::CreateCommandAllocator(D3D12_COMMAN
     return allocator;
 }
 
-ComPtr<ID3D12RootSignature> RenderDevice::CreateRootSignature(D3D12_ROOT_SIGNATURE_DESC  const& desc) const
+ComPtr<ID3D12RootSignature> RenderDevice::Create(D3D12_ROOT_SIGNATURE_DESC  const& desc) const
 {
     ComPtr<ID3D12RootSignature> rootSignature;
     ComPtr<ID3DBlob> signature;
@@ -301,9 +304,9 @@ ComPtr<ID3D12RootSignature> RenderDevice::CreateRootSignature(D3D12_ROOT_SIGNATU
     return rootSignature;
 }
 
-ComPtr<ID3D12RootSignature> RenderDevice::CreateRootSignature(D3D12_ROOT_SIGNATURE_DESC1 const& desc) const
+ComPtr<ID3D12RootSignature> RenderDevice::Create(D3D12_ROOT_SIGNATURE_DESC1 const& desc) const
 {
-    return CreateRootSignature(reinterpret_cast<D3D12_ROOT_SIGNATURE_DESC const&>(desc));
+    return Create(reinterpret_cast<D3D12_ROOT_SIGNATURE_DESC const&>(desc));
 }
 
 ComPtr<ID3D12GraphicsCommandList> RenderDevice::CreateDirectCommandList(ComRef<ID3D12CommandAllocator> allocator, ComRef<ID3D12PipelineState> pipelineState) const
@@ -503,7 +506,7 @@ ComPtr<ID3D12PipelineState> RenderDevice::Create(Pipeline::State const& state) c
         .SampleMask            = state.Multisampling.Mask,
         .RasterizerState       = state.RasterizerState,
         .DepthStencilState     = state.DepthStencilState,
-        .InputLayout           = state.InputLayout,
+        .InputLayout           { .pInputElementDescs = state.InputLayout.data(), .NumElements = static_cast<uint32_t>(state.InputLayout.size()) },
         .PrimitiveTopologyType = state.TopologyType,
         .NumRenderTargets      = state.RTVFormats[0] == DXGI_FORMAT_UNKNOWN ? 0u :
                                  state.RTVFormats[1] == DXGI_FORMAT_UNKNOWN ? 1u :

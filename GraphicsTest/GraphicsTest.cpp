@@ -380,7 +380,7 @@ void AnimateAssets(RenderDevice const& renderDevice, Assets const& assets)
 
     float const fovAngleY = 90.0f;
     float const fovRadiansY = fovAngleY * XM_PI / 180.0f;
-    Projection = XMMatrixPerspectiveFovInfiniteRH(fovRadiansY, 1280.0 / 720.0, 0.0001f);
+    Projection = XMMatrixPerspectiveFovInfiniteRH(fovRadiansY, static_cast<float>(renderDevice.Width) / static_cast<float>(renderDevice.Height), 0.0001f);
 
     InverseProjection = XMMatrixInverse(nullptr, Projection);
 
@@ -564,7 +564,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
     };
     RegisterClassEx(&windowClass);
 
-    RECT windowRect{ 0, 0, 1280, 720 };
+    //uint32_t width  = 3840;
+    //uint32_t height = 2160;
+    uint32_t width  = 1920;
+    uint32_t height = 1080;
+    //uint32_t width  = 1280;
+    //uint32_t height =  720;
+
+    RECT windowRect{ 0, 0, static_cast<int>(width), static_cast<int>(height) };
     AdjustWindowRect(&windowRect, WS_OVERLAPPEDWINDOW, FALSE);
 
     // Create the window and store a handle to it.
@@ -593,7 +600,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
     };
     RegisterRawInputDevices(&rid[0], std::size(rid), sizeof(rid));
 
-    auto       renderDevice = RenderDevice::Create(hwnd);
+    auto       renderDevice = RenderDevice::Create(hwnd, width, height);
     auto const assets       = LoadAssets(renderDevice);
 
     pRenderDevice = &renderDevice;

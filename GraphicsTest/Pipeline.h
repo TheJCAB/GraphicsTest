@@ -17,6 +17,28 @@
 
 struct RenderPipelineAssets
 {
+    struct SceneConstants
+    {
+        XMUINT2  Size;
+
+        // ViewPos.xy / z projected into [0..width, 0..height] screen space
+        XMFLOAT2 ProjectionScale;
+        XMFLOAT2 ProjectionBias ;
+
+        XMFLOAT2 InverseProjectionScale;
+        XMFLOAT2 InverseProjectionBias ;
+
+        // ViewPos.xy / z projected into [0..1, 0..1] normalized space
+        XMFLOAT2 NormalizedProjectionScale;
+        XMFLOAT2 NormalizedProjectionBias ;
+
+        XMFLOAT2 InverseNormalizedProjectionScale;
+        XMFLOAT2 InverseNormalizedProjectionBias ;
+
+        XMFLOAT2 InverseAspectRatio;
+        XMFLOAT2 AspectRatio       ;
+    };
+
     IntermediateRenderTarget    VisibilityBuffer;
     IntermediateDepthBuffer     DepthBuffer;
 
@@ -43,10 +65,6 @@ struct RenderPipelineAssets
     IntermediateRenderTarget ColorBuffer;
     UINT                     ColorBufferUav = 0;
 
-    struct SceneConstants
-    {
-        XMFLOAT4X4 InverseProjection;
-    };
     CpuAccessibleBuffer<SceneConstants> SceneConstantsBuffer[FrameCount];
 
     RenderPipelineAssets(RenderDevice&);

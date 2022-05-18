@@ -46,9 +46,9 @@ inline void ThrowIfFailed(HRESULT hr)
 }
 
 
-namespace Root     { template < typename... args > struct SignatureDescription; }
-namespace Pipeline {                               struct State;                }
-namespace Compute  {                               struct State;                }
+namespace Root     { template < typename... args > struct Signature; }
+namespace Pipeline {                               struct State;     }
+namespace Compute  {                               struct State;     }
 
 
 
@@ -122,6 +122,9 @@ struct RenderDevice
     DescriptorHeap<D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV> srvDescriptorHeap;
     DescriptorHeap<D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER    > samplerDescriptorHeap;
 
+    uint32_t Width  = 0;
+    uint32_t Height = 0;
+
     D3D12_VIEWPORT               viewport;
     D3D12_RECT                   scissorRect;
 
@@ -139,8 +142,8 @@ struct RenderDevice
 
     ComPtr<ID3D12CommandAllocator> CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE) const;
 
-    ComPtr<ID3D12RootSignature> CreateRootSignature(D3D12_ROOT_SIGNATURE_DESC  const&) const;
-    ComPtr<ID3D12RootSignature> CreateRootSignature(D3D12_ROOT_SIGNATURE_DESC1 const&) const;
+    ComPtr<ID3D12RootSignature> Create(D3D12_ROOT_SIGNATURE_DESC  const&) const;
+    ComPtr<ID3D12RootSignature> Create(D3D12_ROOT_SIGNATURE_DESC1 const&) const;
 
     template < typename... args > ComPtr<ID3D12RootSignature> CreateRootSignature() const;
 
@@ -163,7 +166,7 @@ struct RenderDevice
     void StartFrame  ();
     void PresentFrame();
 
-    static RenderDevice Create(HWND const hwnd);
+    static RenderDevice Create(HWND hwnd, uint32_t width, uint32_t height);
 };
 
 void ExecuteCommandList(ComRef<ID3D12CommandQueue>, ComRef<ID3D12GraphicsCommandList>);
@@ -459,7 +462,7 @@ template < D3D12_ROOT_SIGNATURE_FLAGS flags > struct Flags{};
 
 
 
-template <> struct SignatureDescription<>
+template <> struct Signature<>
 {
     static constexpr ParameterList<> Parameters{};
     static constexpr D3D12_ROOT_SIGNATURE_DESC1 Desc{
@@ -473,10 +476,10 @@ template <> struct SignatureDescription<>
     operator D3D12_ROOT_SIGNATURE_DESC1 const&() const { return Desc; }
 };
 
-template < D3D12_SHADER_VISIBILITY visibility, typename... ranges, typename... args > struct SignatureDescription<Table<visibility, ranges...>, args...>
+template < D3D12_SHADER_VISIBILITY visibility, typename... ranges, typename... args > struct Signature<Table<visibility, ranges...>, args...>
 {
 private:
-    using Next = SignatureDescription<args...>;
+    using Next = Signature<args...>;
 public:
     static constexpr auto Parameters = Next::Parameters.Cons<Table<visibility, ranges...>>;
     static constexpr D3D12_ROOT_SIGNATURE_DESC1 Desc{
@@ -490,10 +493,10 @@ public:
     operator D3D12_ROOT_SIGNATURE_DESC1 const&() const { return Desc; }
 };
 
-template < D3D12_ROOT_PARAMETER_TYPE type, D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space, D3D12_ROOT_DESCRIPTOR_FLAGS flags, typename... args > struct SignatureDescription<Descriptor<type, visibility, reg, space, flags>, args...>
+template < D3D12_ROOT_PARAMETER_TYPE type, D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space, D3D12_ROOT_DESCRIPTOR_FLAGS flags, typename... args > struct Signature<Descriptor<type, visibility, reg, space, flags>, args...>
 {
 private:
-    using Next = SignatureDescription<args...>;
+    using Next = Signature<args...>;
 public:
     static constexpr auto Parameters = Next::Parameters.Cons<Descriptor<type, visibility, reg, space, flags>>;
     static constexpr D3D12_ROOT_SIGNATURE_DESC1 Desc{
@@ -507,10 +510,10 @@ public:
     operator D3D12_ROOT_SIGNATURE_DESC1 const&() const { return Desc; }
 };
 
-template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space, UINT count, typename... args > struct SignatureDescription<Constants<visibility, reg, space, count>, args...>
+template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space, UINT count, typename... args > struct Signature<Constants<visibility, reg, space, count>, args...>
 {
 private:
-    using Next = SignatureDescription<args...>;
+    using Next = Signature<args...>;
 public:
     static constexpr auto Parameters = Next::Parameters.Cons<Constants<visibility, reg, space, count>>;
     static constexpr D3D12_ROOT_SIGNATURE_DESC1 Desc{
@@ -524,10 +527,10 @@ public:
     operator D3D12_ROOT_SIGNATURE_DESC1 const&() const { return Desc; }
 };
 
-template < D3D12_ROOT_SIGNATURE_FLAGS flags, typename... args > struct SignatureDescription<Flags<flags>, args...>
+template < D3D12_ROOT_SIGNATURE_FLAGS flags, typename... args > struct Signature<Flags<flags>, args...>
 {
 private:
-    using Next = SignatureDescription<args...>;
+    using Next = Signature<args...>;
 public:
     static constexpr auto Parameters = Next::Parameters;
     static constexpr D3D12_ROOT_SIGNATURE_DESC1 Desc{
@@ -547,7 +550,7 @@ public:
 template < typename... args >
 inline ComPtr<ID3D12RootSignature> RenderDevice::CreateRootSignature() const
 {
-    return CreateRootSignature(Root::SignatureDescription<args...>{});
+    return Create(Root::Signature<args...>{});
 }
 
 
@@ -563,6 +566,35 @@ struct Shader
 ComPtr<ID3DBlob> Compile(Shader const&);
 
 
+
+struct SV_Position { static constexpr char Name[] = "SV_Position"; static constexpr uint32_t Index = 0; };
+
+namespace Vertex
+{
+
+template < typename Semantic, DXGI_FORMAT Format, uint32_t OffsetInBytes >
+struct Input
+{
+    static constexpr D3D12_INPUT_ELEMENT_DESC Desc
+    {
+        .SemanticName      = Semantic::Name,
+        .SemanticIndex     = Semantic::Index,
+        .Format            = Format,
+        .AlignedByteOffset = OffsetInBytes,
+        .InputSlotClass    = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
+    };
+};
+
+template < typename... Inputs >
+struct InputLayout
+{
+    static constexpr std::array<D3D12_INPUT_ELEMENT_DESC, sizeof...(Inputs)> Descs { Inputs::Desc... };
+
+    operator std::span<D3D12_INPUT_ELEMENT_DESC const>() const { return Descs; }
+};
+
+}
+// namespace Vertex
 
 namespace Pipeline
 {
@@ -585,7 +617,7 @@ struct State
     ComRef<ID3D12RootSignature>   RootSignature;
 
     D3D12_PRIMITIVE_TOPOLOGY_TYPE TopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-    D3D12_INPUT_LAYOUT_DESC       InputLayout  {};
+    std::span<D3D12_INPUT_ELEMENT_DESC const> InputLayout{};
     ComPtr<ID3DBlob>              VS;
     ComPtr<ID3DBlob>              DS;
     ComPtr<ID3DBlob>              HS;
