@@ -114,7 +114,7 @@ float GetDepth(uint2 pos, uint s)
 
 // ViewPos.xy / z projected into [0..1280, 0..720] screen space
 static const float2 ProjectionScale = float2( -720.0f / 2.0f,  720.0f / 2.0f);
-static const float2 ProjectionBias  = float2( 1280.0f / 2.0f, -720.0f / 2.0f);
+static const float2 ProjectionBias  = float2( 1280.0f / 2.0f,  720.0f / 2.0f);
 
 static const float2 InverseProjectionScale = float2(   -2.0f / 720.0f,  2.0f / 720.0f);
 static const float2 InverseProjectionBias  = float2( 1280.0f / 720.0f, -1.0f);
@@ -353,6 +353,8 @@ struct GBufferSample
 {
     float3 ViewPos;         // As is, or... say 48-64 bits (plus instance index for constants)
     float3 Barycentric;     // UNORM, 32 bits compressed, possibly less
+    float3 dBarycentric_dx;
+    float3 dBarycentric_dy;
     float3 ViewNormal;      // UNORM, 2 * 15 + 2 = 32 bits compressed
     float3 DiffuseColor;
     //float4 Weight;          // UNORM  4 * 5      = 20 bits compressed
@@ -388,14 +390,41 @@ GBufferSample GetGBufferSample(uint visibility, float3 viewPos)
     result.ViewPos    = viewPos;
     result.ViewNormal = normalize(mul(normalize(normal0 * result.Barycentric[0] + normal1 * result.Barycentric[1] + normal2 * result.Barycentric[2]), (float3x3)modelToView));
 
+    float2 sPos    = (viewPos.xy / viewPos.z) * ProjectionScale + ProjectionBias;
+    float2 sPos_dx = sPos + float2(1.0f, 0.0f);
+    float2 sPos_dy = sPos + float2(0.0f, 1.0f);
+
+    float3 zViewPos_dx = float3((sPos_dx * InverseProjectionScale + InverseProjectionBias) * viewPos.z, viewPos.z);
+    float3 zViewPos_dy = float3((sPos_dy * InverseProjectionScale + InverseProjectionBias) * viewPos.z, viewPos.z);
+
+    float3 viewPos_dx = zViewPos_dx * (dot(viewPos, result.ViewNormal) / dot(zViewPos_dx, result.ViewNormal));
+    float3 viewPos_dy = zViewPos_dy * (dot(viewPos, result.ViewNormal) / dot(zViewPos_dy, result.ViewNormal));
+
+    float3 barycentric_dx = GetBarycentric(modelIndex, i, modelToView, viewPos_dx);
+    float3 barycentric_dy = GetBarycentric(modelIndex, i, modelToView, viewPos_dy);
+
+    result.dBarycentric_dx = barycentric_dx - result.Barycentric;
+    result.dBarycentric_dy = barycentric_dy - result.Barycentric;
+
     if (diffuseTextureId != 0)
     {
+        float2 uv0 = vertexAttributes[modelIndex][i[0]].UV;
+        float2 uv1 = vertexAttributes[modelIndex][i[1]].UV;
+        float2 uv2 = vertexAttributes[modelIndex][i[2]].UV;
         float2 uv =
-            vertexAttributes[modelIndex][i[0]].UV * result.Barycentric[0] +
-            vertexAttributes[modelIndex][i[1]].UV * result.Barycentric[1] +
-            vertexAttributes[modelIndex][i[2]].UV * result.Barycentric[2];
+            uv0 * result.Barycentric[0] +
+            uv1 * result.Barycentric[1] +
+            uv2 * result.Barycentric[2];
+        float2 ddx =
+            uv0 * result.dBarycentric_dx[0] +
+            uv1 * result.dBarycentric_dx[1] +
+            uv2 * result.dBarycentric_dx[2];
+        float2 ddy =
+            uv0 * result.dBarycentric_dy[0] +
+            uv1 * result.dBarycentric_dy[1] +
+            uv2 * result.dBarycentric_dy[2];
 
-        result.DiffuseColor *= textures[diffuseTextureId - 1].SampleLevel(defaultSampler, uv, 4); // TODO: Do MIPs properly
+        result.DiffuseColor *= textures[diffuseTextureId - 1].SampleGrad(defaultSampler, uv, ddx, ddy);
     }
 
     return result;

@@ -176,18 +176,18 @@ Assets LoadAssets(RenderDevice& renderDevice)
         instance.Roll  = static_cast<uint16_t>(rand());
     }
 
-    {
-        auto objModel = LoadObjModel(R"(X:\TEMP\mary-rose-a-wooden-tankard\source\maryRoseTankard.zip\MaryRoseTankard_100kMesh.obj)");
-        RecenterObjModelPositions(objModel, 50);
-        AddObjEdgesAndAdjacency  (objModel);
-        AddObjModelMissingNormals(objModel);
-    
-        for (auto& model : UploadObjModel(objModel, *assets.textureManager, *assets.materialManager, uploader, renderDevice))
-        {
-            auto const modelId = assets.modelManager->AllocateNewModel(renderDevice, std::move(model));
-            assets.objModelInstances.push_back(assets.instanceManager->AllocateNewInstance(renderDevice, *assets.modelManager, Instance{modelId, 1.0f, XMVectorSet(-8, 0, 0, 0)}));
-        }
-    }
+    //{
+    //    auto objModel = LoadObjModel(R"(X:\TEMP\mary-rose-a-wooden-tankard\source\maryRoseTankard.zip\MaryRoseTankard_100kMesh.obj)");
+    //    RecenterObjModelPositions(objModel, 50);
+    //    AddObjEdgesAndAdjacency  (objModel);
+    //    AddObjModelMissingNormals(objModel);
+    //
+    //    for (auto& model : UploadObjModel(objModel, *assets.textureManager, *assets.materialManager, uploader, renderDevice))
+    //    {
+    //        auto const modelId = assets.modelManager->AllocateNewModel(renderDevice, std::move(model));
+    //        assets.objModelInstances.push_back(assets.instanceManager->AllocateNewInstance(renderDevice, *assets.modelManager, Instance{modelId, 1.0f, XMVectorSet(-8, 0, 0, 0)}));
+    //    }
+    //}
 
     //{
     //    auto objModel = LoadObjModel(R"(C:\Users\jcab\Downloads\ameise\source\Ameise_C\Ameise_C.obj)");
@@ -202,18 +202,18 @@ Assets LoadAssets(RenderDevice& renderDevice)
     //    }
     //}
 
-    //{
-    //    auto objModel = LoadObjModel(R"(C:\Users\jcab\Downloads\San_Miguel\san-miguel-low-poly.obj)");
-    //    RecenterObjModelPositions(objModel, 1);
-    //    AddObjEdgesAndAdjacency  (objModel);
-    //    AddObjModelMissingNormals(objModel);
-    //
-    //    for (auto& model : UploadObjModel(objModel, *assets.textureManager, *assets.materialManager, uploader, renderDevice))
-    //    {
-    //        auto const modelId = assets.modelManager->AllocateNewModel(renderDevice, std::move(model));
-    //        assets.objModelInstances.push_back(assets.instanceManager->AllocateNewInstance(renderDevice, *assets.modelManager, Instance{modelId, 1.0f, XMVectorSet(0, 0, 4, 6)}));
-    //    }
-    //}
+    {
+        auto objModel = LoadObjModel(R"(C:\Users\jcab\Downloads\San_Miguel\san-miguel-low-poly.obj)");
+        RecenterObjModelPositions(objModel, 1);
+        AddObjEdgesAndAdjacency  (objModel);
+        AddObjModelMissingNormals(objModel);
+    
+        for (auto& model : UploadObjModel(objModel, *assets.textureManager, *assets.materialManager, uploader, renderDevice))
+        {
+            auto const modelId = assets.modelManager->AllocateNewModel(renderDevice, std::move(model));
+            assets.objModelInstances.push_back(assets.instanceManager->AllocateNewInstance(renderDevice, *assets.modelManager, Instance{modelId, 1.0f, XMVectorSet(0, 0, 4, 6)}));
+        }
+    }
 
     //FILE* const f = fopen(, "r");
 
@@ -316,6 +316,8 @@ int32_t cameraPitch = 0;
 XMVECTOR eye{};
 XMVECTOR cameraOrientation = XMQuaternionIdentity();
 
+bool g_focus = true;
+
 bool g_movementZForward  = false;
 bool g_movementZBackward = false;
 bool g_movementXForward  = false;
@@ -409,6 +411,7 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPara
         return 0;
 
     case WM_INPUT:
+        if (g_focus)
         {
             RAWINPUT raw{};
             UINT dwSize = sizeof(raw);
@@ -455,7 +458,12 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPara
         // OnKeyDown(static_cast<UINT8>(wParam));
         return 0;
 
+    case WM_SETFOCUS:
+        g_focus             = true;
+        return 0;
+
     case WM_KILLFOCUS:
+        g_focus             = false;
         g_movementZForward  = false;
         g_movementZBackward = false;
         g_movementXForward  = false;
