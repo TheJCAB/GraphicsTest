@@ -176,18 +176,18 @@ Assets LoadAssets(RenderDevice& renderDevice)
         instance.Roll  = static_cast<uint16_t>(rand());
     }
 
-    {
-        auto objModel = LoadObjModel(R"(X:\TEMP\mary-rose-a-wooden-tankard\source\maryRoseTankard.zip\MaryRoseTankard_100kMesh.obj)");
-        RecenterObjModelPositions(objModel, 50);
-        AddObjEdgesAndAdjacency  (objModel);
-        AddObjModelMissingNormals(objModel);
-    
-        for (auto& model : UploadObjModel(objModel, *assets.textureManager, *assets.materialManager, uploader, renderDevice))
-        {
-            auto const modelId = assets.modelManager->AllocateNewModel(renderDevice, std::move(model));
-            assets.objModelInstances.push_back(assets.instanceManager->AllocateNewInstance(renderDevice, *assets.modelManager, Instance{modelId, 1.0f, XMVectorSet(-8, 0, 0, 0)}));
-        }
-    }
+    //{
+    //    auto objModel = LoadObjModel(R"(X:\TEMP\mary-rose-a-wooden-tankard\source\maryRoseTankard.zip\MaryRoseTankard_100kMesh.obj)");
+    //    RecenterObjModelPositions(objModel, 50);
+    //    AddObjEdgesAndAdjacency  (objModel);
+    //    AddObjModelMissingNormals(objModel);
+    //
+    //    for (auto& model : UploadObjModel(objModel, *assets.textureManager, *assets.materialManager, uploader, renderDevice))
+    //    {
+    //        auto const modelId = assets.modelManager->AllocateNewModel(renderDevice, std::move(model));
+    //        assets.objModelInstances.push_back(assets.instanceManager->AllocateNewInstance(renderDevice, *assets.modelManager, Instance{modelId, 1.0f, XMVectorSet(-8, 0, 0, 0)}));
+    //    }
+    //}
 
     //{
     //    auto objModel = LoadObjModel(R"(C:\Users\jcab\Downloads\ameise\source\Ameise_C\Ameise_C.obj)");
@@ -202,18 +202,18 @@ Assets LoadAssets(RenderDevice& renderDevice)
     //    }
     //}
 
-    //{
-    //    auto objModel = LoadObjModel(R"(C:\Users\jcab\Downloads\San_Miguel\san-miguel-low-poly.obj)");
-    //    RecenterObjModelPositions(objModel, 1);
-    //    AddObjEdgesAndAdjacency  (objModel);
-    //    AddObjModelMissingNormals(objModel);
-    //
-    //    for (auto& model : UploadObjModel(objModel, *assets.textureManager, *assets.materialManager, uploader, renderDevice))
-    //    {
-    //        auto const modelId = assets.modelManager->AllocateNewModel(renderDevice, std::move(model));
-    //        assets.objModelInstances.push_back(assets.instanceManager->AllocateNewInstance(renderDevice, *assets.modelManager, Instance{modelId, 1.0f, XMVectorSet(0, 0, 4, 6)}));
-    //    }
-    //}
+    {
+        auto objModel = LoadObjModel(R"(C:\Users\jcab\Downloads\San_Miguel\san-miguel-low-poly.obj)");
+        RecenterObjModelPositions(objModel, 1);
+        AddObjEdgesAndAdjacency  (objModel);
+        AddObjModelMissingNormals(objModel);
+    
+        for (auto& model : UploadObjModel(objModel, *assets.textureManager, *assets.materialManager, uploader, renderDevice))
+        {
+            auto const modelId = assets.modelManager->AllocateNewModel(renderDevice, std::move(model));
+            assets.objModelInstances.push_back(assets.instanceManager->AllocateNewInstance(renderDevice, *assets.modelManager, Instance{modelId, 1.0f, XMVectorSet(0, 0, 4, 6)}));
+        }
+    }
 
     //FILE* const f = fopen(, "r");
 

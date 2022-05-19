@@ -248,11 +248,17 @@ RenderDevice RenderDevice::Create(HWND const hwnd, uint32_t const width, uint32_
         assert(rtvIndex == 0);
         auto rtvHandle = renderDevice.rtvDescriptorHeap.GetCpuDescriptorHandle(0);
 
+        D3D12_RENDER_TARGET_VIEW_DESC const rtvDesc
+        {
+            .Format        = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            .ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D,
+        };
+
          // Create a RTV and a command allocator for each frame.
         for (UINT n = 0; n < FrameCount; n++)
         {
             ThrowIfFailed(renderDevice.swapChain->GetBuffer(n, IID_PPV_ARGS(&renderDevice.renderTargets[n])));
-            renderDevice.device->CreateRenderTargetView(renderDevice.renderTargets[n].Get(), nullptr, rtvHandle);
+            renderDevice.device->CreateRenderTargetView(renderDevice.renderTargets[n].Get(), &rtvDesc, rtvHandle);
 
             rtvHandle = renderDevice.rtvDescriptorHeap.NextDescriptorHandle(rtvHandle);
 
@@ -264,7 +270,8 @@ RenderDevice RenderDevice::Create(HWND const hwnd, uint32_t const width, uint32_
         assert(srvIndex == 0);
         auto srvHandle = renderDevice.srvDescriptorHeap.GetCpuDescriptorHandle(0);
 
-        D3D12_SHADER_RESOURCE_VIEW_DESC const srvDesc{
+        D3D12_SHADER_RESOURCE_VIEW_DESC const srvDesc
+        {
             .Format                  = swapChainDesc.Format,
             .ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D,
             .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
@@ -624,7 +631,7 @@ ComPtr<ID3D12Resource> AssetUploader::CreateStaticTexture(
 {
     ComPtr<ID3D12Resource> texture;
 
-    Texture2DDesc desc{ width, height, mips, DXGI_FORMAT_R8G8B8A8_UNORM }; // _SRGB
+    Texture2DDesc desc{ width, height, mips, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB };
 
     ThrowIfFailed(m_device->CreateCommittedResource(
         &StaticBufferHeapProperties,
@@ -637,7 +644,7 @@ ComPtr<ID3D12Resource> AssetUploader::CreateStaticTexture(
     auto const textureDesc = texture->GetDesc();
 
     ComPtr<ID3D12Resource> uavTexture;
-    Texture2DDesc uavDesc{ width, height, textureDesc.MipLevels, DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS };
+    Texture2DDesc uavDesc{ width, height, textureDesc.MipLevels, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS };
     ThrowIfFailed(m_device->CreateCommittedResource(
         &StaticBufferHeapProperties,
         D3D12_HEAP_FLAG_NONE,
@@ -778,7 +785,7 @@ void MipGenerationPass::Render(ComRef<ID3D12Device> device, ComRef<ID3D12Graphic
 
         D3D12_UNORDERED_ACCESS_VIEW_DESC const uavDesc
         {
-            .Format        = desc.Format,
+            .Format        = DXGI_FORMAT_R8G8B8A8_UNORM, //desc.Format,// TODO: Properly detect SRGB and remove it as needed
             .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D,
             .Texture2D     { .MipSlice = i },
         };

@@ -683,8 +683,8 @@ float4 ResolvePS(float4 position : SV_Position) : SV_Target
         pixelColor = clamp(mixedColor, 0, 1);
     }
 
-    return LinearToGamma(
-        pixelColor
+    return //LinearToGamma(
+        pixelColor;
         /*
         * 0.4f +
         colorMap[floor(position.xy) + uint2(-1, 0)] * 0.15f +
@@ -692,5 +692,5 @@ float4 ResolvePS(float4 position : SV_Position) : SV_Target
         colorMap[floor(position.xy) + uint2(0, -1)] * 0.15f +
         colorMap[floor(position.xy) + uint2(0,  1)] * 0.15f
         */
-    );
+    //);
 }
