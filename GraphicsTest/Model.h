@@ -2,6 +2,8 @@
 //
 #pragma once
 
+#if !HLSL
+
 #include "JcabD3D.h"
 
 #include <shlobj.h>
@@ -14,7 +16,27 @@
 #include <map>
 #include <filesystem>
 
-inline bool g_animate = false;
+#endif // !HLSL
+
+
+
+// Define some types.
+
+#if HLSL
+
+typedef float4x4 XMFLOAT4X4;
+typedef float2   XMFLOAT2;
+typedef float3   XMFLOAT3;
+typedef uint3    XMUINT3;
+typedef uint     uint32_t;
+
+typedef uint TextureId;
+
+#else // !HLSL
+
+enum TextureId : uint32_t { Invalid = 0 };
+
+#endif // !HLSL
 
 // Shared with the shader.
 #define MAX_MODEL_DEFINITIONS     100
@@ -22,6 +44,48 @@ inline bool g_animate = false;
 #define MAX_MATERIAL_DEFINITIONS 1000
 #define MAX_TEXTURES             1000
 
+
+struct MaterialParameters
+{
+    XMFLOAT3  AmbientColor;
+    XMFLOAT3  DiffuseColor;
+    XMFLOAT3  SpecularColor;
+    float     SpecularExponent;
+    TextureId DiffuseTextureId;
+};
+
+typedef XMFLOAT3 VertexPosition;
+
+struct VertexAttributes
+{
+    XMFLOAT3 Normal;
+    XMFLOAT2 UV;
+    uint32_t Color;
+};
+
+struct TriangleParameters
+{
+    uint32_t Color;
+    uint32_t Patch;
+    uint32_t MaterialIndex;
+};
+
+typedef XMUINT3 TriangleIndices;
+
+struct InstanceAttributes
+{
+    XMFLOAT4X4 View;
+    XMFLOAT4X4 Projection;
+    uint32_t   ModelIndex;
+    uint32_t   Padding[3];
+};
+
+
+
+
+#if !HLSL
+
+inline bool g_animate = false;
 
 inline XMMATRIX View;
 inline XMMATRIX InverseView;
@@ -32,7 +96,7 @@ inline XMMATRIX ViewProj;
 
 struct Texture
 {
-    enum Id : uint32_t { Invalid = 0 };
+    using Id = TextureId;
 
     std::filesystem::path  Path;
     ComPtr<ID3D12Resource> Resource;
@@ -75,15 +139,6 @@ struct Material
     std::string DiffuseTexturePathName;
 };
 
-struct MaterialParameters
-{
-    XMFLOAT3    AmbientColor;
-    XMFLOAT3    DiffuseColor;
-    XMFLOAT3    SpecularColor;
-    float       SpecularExponent;
-    Texture::Id DiffuseTexture;
-};
-
 struct MaterialManager
 {
     UINT                                                         MaterialCount = 0;
@@ -110,25 +165,6 @@ struct MaterialManager
 
 
 
-struct VertexPosition
-{
-    XMFLOAT3 position;
-};
-
-struct VertexAttributes
-{
-    XMFLOAT3 normal;
-    XMFLOAT2 uv;
-    uint32_t color;
-};
-
-struct TriangleParameters
-{
-    uint32_t color;
-    uint32_t patch;
-    uint32_t materialIndex;
-};
-
 
 struct Model
 {
@@ -144,8 +180,6 @@ struct Model
     D3D12_VERTEX_BUFFER_VIEW VertexPositionsBufferView{};
     ComPtr<ID3D12Resource>   VertexAttributesBuffer   {};
 };
-
-using TriangleIndices = std::array<uint32_t, 3>;
 
 struct ModelVerticesDefinition
 {
@@ -213,14 +247,6 @@ struct ModelManager
 };
 
 
-struct InstanceAttributes
-{
-    XMFLOAT4X4 View;
-    XMFLOAT4X4 Projection;
-    uint32_t   ModelIndex;
-    uint32_t   Padding[3];
-};
-
 struct Instance
 {
     enum Id : uint32_t { Invalid = 0 };
@@ -286,3 +312,5 @@ struct InstanceManager
 
 void UpdateModelInstance(RenderDevice const& renderDevice, InstanceManager& instanceManager, Instance::Id const instanceId);
 void UpdateStaticModelInstance(RenderDevice const& renderDevice, InstanceManager& instanceManager, Instance::Id const instanceId);
+
+#endif // !HLSL

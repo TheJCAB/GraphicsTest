@@ -3,6 +3,15 @@
 
 #include "Pipeline.h"
 
+#include "VisibilityVSShader.h"
+#include "VisibilityPSShader.h"
+#include "MsaaGatherPassShader.h"
+#include "ComputableGatherPassShader.h"
+#include "ColorPassShader.h"
+#include "PostprocessShader.h"
+#include "ResolveVSShader.h"
+#include "ResolvePSShader.h"
+
 
 RenderPipelineAssets::RenderPipelineAssets(RenderDevice& renderDevice)
 {
@@ -78,8 +87,8 @@ VisibilityPass::VisibilityPass(RenderDevice& renderDevice)
             .RootSignature         { RootSignature },
             .TopologyType          = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
             .InputLayout           = Vertex::InputLayout<Vertex::Input<SV_Position, DXGI_FORMAT_R32G32B32_FLOAT, 0>>{},
-            .VS                    = Compile(Shader{ L"model.hlsl", "VisibilityVS", "vs_5_1" }),
-            .PS                    = Compile(Shader{ L"model.hlsl", "VisibilityPS", "ps_5_1" }),
+            .VS                    = std::span{VisibilityVSShader},
+            .PS                    = std::span{VisibilityPSShader},
             .DepthStencilState     = DefaultDepthStencilDesc,
             .Multisampling         = Pipeline::Multisampling<8>,
             .RTVFormats            { DXGI_FORMAT_R32_UINT, },
@@ -150,7 +159,7 @@ MsaaGatherPass::MsaaGatherPass(RenderDevice& renderDevice)
     PipelineState = renderDevice.Create(Compute::State
         {
             .RootSignature{ RootSignature },
-            .CS           = Compile(Shader{ L"model.hlsl", "MsaaGatherPass", "cs_5_1" }),
+            .CS           = std::span{MsaaGatherPassShader},
         }
     );
 }
@@ -192,7 +201,7 @@ ComputableGatherPass::ComputableGatherPass(RenderDevice& renderDevice)
     PipelineState = renderDevice.Create(Compute::State
         {
             .RootSignature{ RootSignature },
-            .CS           = Compile(Shader{ L"model.hlsl", "ComputableGatherPass", "cs_5_1" }),
+            .CS           = std::span{ComputableGatherPassShader},
         }
     );
 }
@@ -243,7 +252,7 @@ ColorPass::ColorPass(RenderDevice& renderDevice)
     PipelineState = renderDevice.Create(Compute::State
         {
             .RootSignature{ RootSignature },
-            .CS           = Compile(Shader{ L"model.hlsl", "ColorPass", "cs_5_1" }),
+            .CS           { std::span{ColorPassShader} },
         }
     );
 }
@@ -295,7 +304,7 @@ PostprocessPass::PostprocessPass(RenderDevice& renderDevice)
     PipelineState = renderDevice.Create(Compute::State
         {
             .RootSignature{ RootSignature },
-            .CS           = Compile(Shader{ L"model.hlsl", "Postprocess", "cs_5_1" }),
+            .CS           = std::span{PostprocessShader},
         }
     );
 }
@@ -335,8 +344,8 @@ ResolvePass::ResolvePass(RenderDevice& renderDevice)
         {
             .RootSignature         { RootSignature },
             .TopologyType          = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-            .VS                    = Compile(Shader{ L"model.hlsl", "ResolveVS", "vs_5_1" }),
-            .PS                    = Compile(Shader{ L"model.hlsl", "ResolvePS", "ps_5_1" }),
+            .VS                    = std::span{ResolveVSShader},
+            .PS                    = std::span{ResolvePSShader},
             .DepthStencilState     = Pipeline::NoDepthStencil,
             .Multisampling         = Pipeline::NoMultisampling,
             .RTVFormats            { DXGI_FORMAT_R8G8B8A8_UNORM, },

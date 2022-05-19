@@ -1,39 +1,49 @@
 
+#pragma warning(disable: 3579) // vs/ps_5_1 does not support groupshared, groupshared ignored [it's benign]
 
-// Static Model data, available throughout.
+#include "Model.h"
+//// Static Model data, available throughout.
+//
+//// Shared with the shader.
+//#define MAX_MODEL_DEFINITIONS     100
+//#define MAX_INSTANCE_DEFINITIONS 1000
+//#define MAX_MATERIAL_DEFINITIONS 1000
+//#define MAX_TEXTURES             1000
+//
+//struct VertexAttributes
+//{
+//    float3 Normal;
+//    float2 UV;
+//    uint   Color;
+//};
+//
+//struct TriangleParameters
+//{
+//    uint Color;
+//    uint Patch;
+//    uint MaterialIndex;
+//};
+//
+//struct MaterialParameters
+//{
+//    float3 AmbientColor;
+//    float3 DiffuseColor;
+//    float3 SpecularColor;
+//    float  SpecularExponent;
+//    uint   DiffuseTextureId;
+//};
+//
+//struct InstanceAttributes
+//{
+//    float4x4 View;
+//    float4x4 Projection;
+//    uint     ModelIndex;
+//    uint3    Padding;
+//};
 
-// Shared with the shader.
-#define MAX_MODEL_DEFINITIONS     100
-#define MAX_INSTANCE_DEFINITIONS 1000
-#define MAX_MATERIAL_DEFINITIONS 1000
-#define MAX_TEXTURES             1000
-
-struct VertexAttributes
-{
-    float3 Normal;
-    float2 UV;
-    uint   Color;
-};
-
-struct TriangleParameters
-{
-    uint Color;
-    uint Patch;
-    uint MaterialIndex;
-};
-
-struct MaterialParameters
-{
-    float3 AmbientColor;
-    float3 DiffuseColor;
-    float3 SpecularColor;
-    float  SpecularExponent;
-    uint   DiffuseTextureId;
-};
-
-Buffer<uint3>                         indices         [MAX_MODEL_DEFINITIONS] : register(t1, space1);
+StructuredBuffer<TriangleIndices>     indices         [MAX_MODEL_DEFINITIONS] : register(t1, space1);
 StructuredBuffer<TriangleParameters>  triangleParams  [MAX_MODEL_DEFINITIONS] : register(t1, space2);
-StructuredBuffer<float3>              vertexPositions [MAX_MODEL_DEFINITIONS] : register(t1, space3);
+StructuredBuffer<VertexPosition>      vertexPositions [MAX_MODEL_DEFINITIONS] : register(t1, space3);
 StructuredBuffer<VertexAttributes>    vertexAttributes[MAX_MODEL_DEFINITIONS] : register(t1, space4);
 Texture2D<float4>                     textures        [MAX_TEXTURES         ] : register(t1, space5);
 StructuredBuffer<MaterialParameters>  materials                               : register(t0, space5);
@@ -68,14 +78,6 @@ ConstantBuffer<SceneConstants> sceneConstants : register(b0);
 
 
 
-
-struct InstanceAttributes
-{
-    float4x4 View;
-    float4x4 Projection;
-    uint     ModelIndex;
-    uint3    Padding;
-};
 
 cbuffer VisibilityPassRootConstants : register(b0, space1)
 {
@@ -434,7 +436,7 @@ GBufferSample GetGBufferSample(uint visibility, float3 viewPos)
             uv1 * result.dBarycentric_dy[1] +
             uv2 * result.dBarycentric_dy[2];
 
-        result.DiffuseColor *= textures[diffuseTextureId - 1].SampleGrad(defaultSampler, uv, ddx, ddy);
+        result.DiffuseColor *= textures[diffuseTextureId - 1].SampleGrad(defaultSampler, uv, ddx, ddy).rgb;
     }
 
     return result;
@@ -470,7 +472,7 @@ void ColorPass(uint3 pos : SV_DispatchThreadID)
     }
 
     {
-        for (int i = 0; i < numSamples; ++i)
+        for (uint i = 0; i < numSamples; ++i)
         {
             MsaaSample msample = msaaBuffer[i * NumQuads() + computableIndex];
             float4 weights = (float4)DecodeWeights(msample.SampleMask) + 0.01f;

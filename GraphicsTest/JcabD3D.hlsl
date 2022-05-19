@@ -1,4 +1,6 @@
 
+#pragma warning(disable: 3571) // pow(f, e) will not work for negative f, use abs(f) or conditionally handle negative values if you expect them
+
 cbuffer RootConstants : register(b0)
 {
     uint Width;

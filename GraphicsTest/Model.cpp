@@ -106,11 +106,11 @@ Material::Id MaterialManager::AllocateNewMaterial(RenderDevice& renderDevice, As
     params.SpecularExponent = material.SpecularExponent;
     if (!material.DiffuseTexturePathName.empty())
     {
-        params.DiffuseTexture = textureManager.AllocateNewTexture(renderDevice, assetUploader, material.DiffuseTexturePathName);
+        params.DiffuseTextureId = textureManager.AllocateNewTexture(renderDevice, assetUploader, material.DiffuseTexturePathName);
     }
     else
     {
-        params.DiffuseTexture = Texture::Id::Invalid;
+        params.DiffuseTextureId = Texture::Id::Invalid;
     }
 
     return id;

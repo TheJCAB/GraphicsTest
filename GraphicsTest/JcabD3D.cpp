@@ -1,6 +1,8 @@
 
 #include "JcabD3D.h"
 
+#include "MipGenerationPassShader.h"
+
 ComPtr<IDXGIAdapter1> FindHardwareAdapter(ComRef<IDXGIFactory1> pFactory, bool requestHighPerformanceAdapter)
 {
     auto const gpuPreference = requestHighPerformanceAdapter == true ? DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE : DXGI_GPU_PREFERENCE_UNSPECIFIED;
@@ -497,6 +499,35 @@ D3D12_SHADER_BYTECODE GetShaderBytecode(ComRef<ID3DBlob> const shader)
     }
 }
 
+D3D12_SHADER_BYTECODE GetShaderBytecode(ComPtr<ID3DBlob> const& shader)
+{
+    if (shader)
+    {
+        return { shader->GetBufferPointer(), shader->GetBufferSize() };
+    }
+    else
+    {
+        return {};
+    }
+}
+
+D3D12_SHADER_BYTECODE GetShaderBytecode(std::span<BYTE const> const shader)
+{
+    if (!shader.empty())
+    {
+        return { shader.data(), shader.size() };
+    }
+    else
+    {
+        return {};
+    }
+}
+
+D3D12_SHADER_BYTECODE GetShaderBytecode(ShaderCode const& shader)
+{
+    return std::visit([](auto const& actualShader){ return GetShaderBytecode(actualShader); }, shader);
+}
+
 ComPtr<ID3D12PipelineState> RenderDevice::Create(Pipeline::State const& state) const
 {
     ComPtr<ID3D12PipelineState> result;
@@ -725,7 +756,7 @@ MipGenerationPass::MipGenerationPass(RenderDevice const& renderDevice)
     PipelineState = renderDevice.Create(Compute::State
         {
             .RootSignature{ RootSignature },
-            .CS           = Compile(Shader{ L"JcabD3D.hlsl", "MipGenerationPass", "cs_5_1" }),
+            .CS           = std::span{MipGenerationPassShader},
         }
     );
 }

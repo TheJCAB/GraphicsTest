@@ -8,6 +8,7 @@
 
 #include <array>
 #include <span>
+#include <variant>
 #include <functional>
 
 
@@ -596,6 +597,8 @@ struct InputLayout
 }
 // namespace Vertex
 
+using ShaderCode = std::variant<std::span<BYTE const>, ComPtr<ID3DBlob>>;
+
 namespace Pipeline
 {
 
@@ -618,12 +621,12 @@ struct State
 
     D3D12_PRIMITIVE_TOPOLOGY_TYPE TopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     std::span<D3D12_INPUT_ELEMENT_DESC const> InputLayout{};
-    ComPtr<ID3DBlob>              VS;
-    ComPtr<ID3DBlob>              DS;
-    ComPtr<ID3DBlob>              HS;
-    ComPtr<ID3DBlob>              GS;
+    ShaderCode                                VS;
+    ShaderCode                                DS;
+    ShaderCode                                HS;
+    ShaderCode                                GS;
 
-    ComPtr<ID3DBlob>              PS;
+    ShaderCode                    PS;
     D3D12_RASTERIZER_DESC         RasterizerState   = defaultRasterizerDesc;
     D3D12_BLEND_DESC              BlendState        = defaultBlendDesc;
     D3D12_DEPTH_STENCIL_DESC      DepthStencilState = NoDepthStencil;
@@ -635,14 +638,13 @@ struct State
 }
 // namespace Pipeline
 
-
 namespace Compute
 {
 
 struct State
 {
-    ComRef<ID3D12RootSignature>   RootSignature;
-    ComPtr<ID3DBlob>              CS;
+    ComRef<ID3D12RootSignature> RootSignature;
+    ShaderCode                  CS;
 };
 
 }
