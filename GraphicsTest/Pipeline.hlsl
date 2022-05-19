@@ -1,45 +1,5 @@
 
-#pragma warning(disable: 3579) // vs/ps_5_1 does not support groupshared, groupshared ignored [it's benign]
-
-#include "Model.h"
-//// Static Model data, available throughout.
-//
-//// Shared with the shader.
-//#define MAX_MODEL_DEFINITIONS     100
-//#define MAX_INSTANCE_DEFINITIONS 1000
-//#define MAX_MATERIAL_DEFINITIONS 1000
-//#define MAX_TEXTURES             1000
-//
-//struct VertexAttributes
-//{
-//    float3 Normal;
-//    float2 UV;
-//    uint   Color;
-//};
-//
-//struct TriangleParameters
-//{
-//    uint Color;
-//    uint Patch;
-//    uint MaterialIndex;
-//};
-//
-//struct MaterialParameters
-//{
-//    float3 AmbientColor;
-//    float3 DiffuseColor;
-//    float3 SpecularColor;
-//    float  SpecularExponent;
-//    uint   DiffuseTextureId;
-//};
-//
-//struct InstanceAttributes
-//{
-//    float4x4 View;
-//    float4x4 Projection;
-//    uint     ModelIndex;
-//    uint3    Padding;
-//};
+#include "Pipeline.h"
 
 StructuredBuffer<TriangleIndices>     indices         [MAX_MODEL_DEFINITIONS] : register(t1, space1);
 StructuredBuffer<TriangleParameters>  triangleParams  [MAX_MODEL_DEFINITIONS] : register(t1, space2);
@@ -48,36 +8,7 @@ StructuredBuffer<VertexAttributes>    vertexAttributes[MAX_MODEL_DEFINITIONS] : 
 Texture2D<float4>                     textures        [MAX_TEXTURES         ] : register(t1, space5);
 StructuredBuffer<MaterialParameters>  materials                               : register(t0, space5);
 
-
-
-
-
-struct SceneConstants
-{
-    uint2  Size;
-
-    // ViewPos.xy / z projected into [0..width, 0..height] screen space
-    float2 ProjectionScale;
-    float2 ProjectionBias ;
-
-    float2 InverseProjectionScale;
-    float2 InverseProjectionBias ;
-
-    // ViewPos.xy / z projected into [0..1, 0..1] normalized space
-    float2 NormalizedProjectionScale;
-    float2 NormalizedProjectionBias ;
-
-    float2 InverseNormalizedProjectionScale;
-    float2 InverseNormalizedProjectionBias ;
-
-    float2 InverseAspectRatio;
-    float2 AspectRatio       ;
-};
-
 ConstantBuffer<SceneConstants> sceneConstants : register(b0);
-
-
-
 
 cbuffer VisibilityPassRootConstants : register(b0, space1)
 {
@@ -85,6 +16,10 @@ cbuffer VisibilityPassRootConstants : register(b0, space1)
 };
 
 StructuredBuffer<InstanceAttributes> instanceList : register(t0, space0);
+
+
+
+
 
 float4 VisibilityVS(float3 position : SV_Position) : SV_Position
 {
@@ -108,6 +43,9 @@ Texture2DMS<float> depthMap      : register(t2, space0);
 RWTexture2D<float4> colorUav : register(u0, space0);
 
 sampler defaultSampler : register(s0, space0);
+
+
+
 
 #define PSamplesX 2
 #define PSamplesY 2

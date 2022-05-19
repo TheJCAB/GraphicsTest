@@ -2,8 +2,13 @@
 //
 #pragma once
 
+#if HLSL
+
+#include "HLSL.h"
+
+#else // !HLSL
+
 #include "JcabD3D.h"
-#include "Model.h"
 
 #include <shlobj.h>
 
@@ -13,32 +18,38 @@
 #include <map>
 #include <filesystem>
 
+#endif // !HLSL
 
+#include "Model.h"
+
+
+struct SceneConstants
+{
+    XMUINT2  Size;
+
+    // ViewPos.xy / z projected into [0..width, 0..height] screen space
+    XMFLOAT2 ProjectionScale;
+    XMFLOAT2 ProjectionBias ;
+
+    XMFLOAT2 InverseProjectionScale;
+    XMFLOAT2 InverseProjectionBias ;
+
+    // ViewPos.xy / z projected into [0..1, 0..1] normalized space
+    XMFLOAT2 NormalizedProjectionScale;
+    XMFLOAT2 NormalizedProjectionBias ;
+
+    XMFLOAT2 InverseNormalizedProjectionScale;
+    XMFLOAT2 InverseNormalizedProjectionBias ;
+
+    XMFLOAT2 InverseAspectRatio;
+    XMFLOAT2 AspectRatio       ;
+};
+
+
+#if !HLSL
 
 struct RenderPipelineAssets
 {
-    struct SceneConstants
-    {
-        XMUINT2  Size;
-
-        // ViewPos.xy / z projected into [0..width, 0..height] screen space
-        XMFLOAT2 ProjectionScale;
-        XMFLOAT2 ProjectionBias ;
-
-        XMFLOAT2 InverseProjectionScale;
-        XMFLOAT2 InverseProjectionBias ;
-
-        // ViewPos.xy / z projected into [0..1, 0..1] normalized space
-        XMFLOAT2 NormalizedProjectionScale;
-        XMFLOAT2 NormalizedProjectionBias ;
-
-        XMFLOAT2 InverseNormalizedProjectionScale;
-        XMFLOAT2 InverseNormalizedProjectionBias ;
-
-        XMFLOAT2 InverseAspectRatio;
-        XMFLOAT2 AspectRatio       ;
-    };
-
     IntermediateRenderTarget    VisibilityBuffer;
     IntermediateDepthBuffer     DepthBuffer;
 
@@ -148,3 +159,5 @@ struct RenderPipeline
 
     void Render(RenderDevice&, TextureManager const&, MaterialManager const&, ModelManager const&, InstanceManager const&);
 };
+
+#endif // !HLSL

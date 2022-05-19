@@ -2,7 +2,11 @@
 //
 #pragma once
 
-#if !HLSL
+#if HLSL
+
+#include "HLSL.h"
+
+#else // !HLSL
 
 #include "JcabD3D.h"
 
@@ -23,12 +27,6 @@
 // Define some types.
 
 #if HLSL
-
-typedef float4x4 XMFLOAT4X4;
-typedef float2   XMFLOAT2;
-typedef float3   XMFLOAT3;
-typedef uint3    XMUINT3;
-typedef uint     uint32_t;
 
 typedef uint TextureId;
 
