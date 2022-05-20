@@ -129,11 +129,12 @@ Model CreateCubeModel(uint32_t materialIndex, AssetUploader& uploader, RenderDev
 }
 
 
+std::shared_ptr<IRenderPipeline> g_pipeline;
+std::shared_ptr<IRenderPipeline> g_pipeline1;
+std::shared_ptr<IRenderPipeline> g_pipeline2;
 
 struct Assets
 {
-    std::shared_ptr<IRenderPipeline> pipeline;
-
     std::shared_ptr<TextureManager > textureManager;
     std::shared_ptr<MaterialManager> materialManager;
     std::shared_ptr<ModelManager   > modelManager;
@@ -152,8 +153,9 @@ Assets LoadAssets(RenderDevice& renderDevice)
 
     AssetUploader uploader{ renderDevice };
 
-    //assets.pipeline         = std::make_shared<VisDefMsaaPipeline::RenderPipeline> (renderDevice);
-    assets.pipeline         = std::make_shared<VisDefPipeline::RenderPipeline> (renderDevice);
+    g_pipeline  =
+    g_pipeline1 = std::make_shared<VisDefMsaaPipeline::RenderPipeline>(renderDevice);
+    g_pipeline2 = std::make_shared<VisDefPipeline    ::RenderPipeline>(renderDevice);
 
     assets.textureManager   = std::make_shared<TextureManager> (renderDevice);
     assets.materialManager  = std::make_shared<MaterialManager>(renderDevice);
@@ -237,7 +239,7 @@ void RenderFrame(RenderDevice& renderDevice, Assets const& assets)
     // re-recording.
     ThrowIfFailed(renderDevice.commandList->Reset(commandAllocator.Get(), nullptr));
 
-    assets.pipeline->Render(renderDevice, *assets.textureManager, *assets.materialManager, *assets.modelManager, *assets.instanceManager);
+    g_pipeline->Render(renderDevice, *assets.textureManager, *assets.materialManager, *assets.modelManager, *assets.instanceManager);
 
     renderDevice.PresentFrame();
 }
@@ -427,9 +429,10 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPara
                 //int yPosRelative = raw.data.mouse.lLastY;
                 cameraYaw   += raw.data.mouse.lLastX * 0x100000;
                 cameraPitch += raw.data.mouse.lLastY * 0x100000;
+                return 0;
             }
         }
-        return 0;
+        break;
 
     case WM_KEYDOWN:
         {
@@ -437,6 +440,12 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPara
             {
             case VK_SPACE:
                 g_animate = !g_animate;
+                break;
+            case '1':
+                g_pipeline = g_pipeline1;
+                break;
+            case '2':
+                g_pipeline = g_pipeline2;
                 break;
             case 'W':
                 g_movementZForward = true;
@@ -479,9 +488,6 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPara
         {
             switch (static_cast<UINT8>(wParam))
             {
-            case VK_SPACE:
-                g_animate = !g_animate;
-                break;
             case 'W':
                 g_movementZForward = false;
                 break;
