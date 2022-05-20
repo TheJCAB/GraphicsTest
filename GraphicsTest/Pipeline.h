@@ -9,6 +9,7 @@
 #else // !HLSL
 
 #include "JcabD3D.h"
+#include "IRenderPipeline.h"
 
 #include <shlobj.h>
 
@@ -22,6 +23,10 @@
 
 #include "Model.h"
 
+#if !HLSL
+namespace VisDefMsaaPipeline
+{
+#endif // !HLSL
 
 struct SceneConstants
 {
@@ -144,7 +149,7 @@ struct ResolvePass
 };
 
 
-struct RenderPipeline
+struct RenderPipeline : IRenderPipeline
 {
     RenderPipelineAssets assets;
 
@@ -160,4 +165,10 @@ struct RenderPipeline
     void Render(RenderDevice&, TextureManager const&, MaterialManager const&, ModelManager const&, InstanceManager const&);
 };
 
+#endif // !HLSL
+
+
+#if !HLSL
+}
+// namespace VisDefMsaaPipeline
 #endif // !HLSL

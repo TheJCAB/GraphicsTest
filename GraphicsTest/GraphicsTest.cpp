@@ -5,6 +5,7 @@
 #include "Model.h"
 #include "ObjModel.h"
 #include "Pipeline.h"
+#include "Pipeline2.h"
 
 #include <shlobj.h>
 #include <hidusage.h>
@@ -131,7 +132,7 @@ Model CreateCubeModel(uint32_t materialIndex, AssetUploader& uploader, RenderDev
 
 struct Assets
 {
-    std::shared_ptr<RenderPipeline>  pipeline;
+    std::shared_ptr<IRenderPipeline> pipeline;
 
     std::shared_ptr<TextureManager > textureManager;
     std::shared_ptr<MaterialManager> materialManager;
@@ -151,7 +152,9 @@ Assets LoadAssets(RenderDevice& renderDevice)
 
     AssetUploader uploader{ renderDevice };
 
-    assets.pipeline         = std::make_shared<RenderPipeline> (renderDevice);
+    //assets.pipeline         = std::make_shared<VisDefMsaaPipeline::RenderPipeline> (renderDevice);
+    assets.pipeline         = std::make_shared<VisDefPipeline::RenderPipeline> (renderDevice);
+
     assets.textureManager   = std::make_shared<TextureManager> (renderDevice);
     assets.materialManager  = std::make_shared<MaterialManager>(renderDevice);
     assets.modelManager     = std::make_shared<ModelManager>   (renderDevice);

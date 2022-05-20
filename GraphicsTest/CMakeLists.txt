@@ -41,16 +41,27 @@ add_executable (GraphicsTest WIN32
 	Model.cpp           Model.h
 	ObjModel.cpp        ObjModel.h
 	Pipeline.cpp        Pipeline.h
- "HLSL.h")
+    Pipeline2.cpp       Pipeline2.h
 
-add_hlsl_shader(GraphicsTest Pipeline.hlsl "vs_6_0" VisibilityVS         VisibilityVSShader        )
-add_hlsl_shader(GraphicsTest Pipeline.hlsl "ps_6_0" VisibilityPS         VisibilityPSShader        )
-add_hlsl_shader(GraphicsTest Pipeline.hlsl "cs_6_0" MsaaGatherPass       MsaaGatherPassShader      )
-add_hlsl_shader(GraphicsTest Pipeline.hlsl "cs_6_0" ComputableGatherPass ComputableGatherPassShader)
-add_hlsl_shader(GraphicsTest Pipeline.hlsl "cs_6_0" ColorPass            ColorPassShader           )
-add_hlsl_shader(GraphicsTest Pipeline.hlsl "cs_6_0" Postprocess          PostprocessShader         )
-add_hlsl_shader(GraphicsTest Pipeline.hlsl "vs_6_0" ResolveVS            ResolveVSShader           )
-add_hlsl_shader(GraphicsTest Pipeline.hlsl "ps_6_0" ResolvePS            ResolvePSShader           )
+    HLSL.h
+    IRenderPipeline.h
+)
+
+add_hlsl_shader(GraphicsTest Pipeline.hlsl "vs_6_0" VisibilityVS         VisDefMsaaPipeline_VisibilityVSShader        )
+add_hlsl_shader(GraphicsTest Pipeline.hlsl "ps_6_0" VisibilityPS         VisDefMsaaPipeline_VisibilityPSShader        )
+add_hlsl_shader(GraphicsTest Pipeline.hlsl "cs_6_0" MsaaGatherPass       VisDefMsaaPipeline_MsaaGatherPassShader      )
+add_hlsl_shader(GraphicsTest Pipeline.hlsl "cs_6_0" ComputableGatherPass VisDefMsaaPipeline_ComputableGatherPassShader)
+add_hlsl_shader(GraphicsTest Pipeline.hlsl "cs_6_0" ColorPass            VisDefMsaaPipeline_ColorPassShader           )
+add_hlsl_shader(GraphicsTest Pipeline.hlsl "cs_6_0" Postprocess          VisDefMsaaPipeline_PostprocessShader         )
+add_hlsl_shader(GraphicsTest Pipeline.hlsl "vs_6_0" ResolveVS            VisDefMsaaPipeline_ResolveVSShader           )
+add_hlsl_shader(GraphicsTest Pipeline.hlsl "ps_6_0" ResolvePS            VisDefMsaaPipeline_ResolvePSShader           )
+
+add_hlsl_shader(GraphicsTest Pipeline2.hlsl "vs_6_0" VisibilityVS         VisDefPipeline_VisibilityVSShader        )
+add_hlsl_shader(GraphicsTest Pipeline2.hlsl "ps_6_0" VisibilityPS         VisDefPipeline_VisibilityPSShader        )
+add_hlsl_shader(GraphicsTest Pipeline2.hlsl "cs_6_0" ColorPass            VisDefPipeline_ColorPassShader           )
+add_hlsl_shader(GraphicsTest Pipeline2.hlsl "cs_6_0" Postprocess          VisDefPipeline_PostprocessShader         )
+add_hlsl_shader(GraphicsTest Pipeline2.hlsl "vs_6_0" ResolveVS            VisDefPipeline_ResolveVSShader           )
+add_hlsl_shader(GraphicsTest Pipeline2.hlsl "ps_6_0" ResolvePS            VisDefPipeline_ResolvePSShader           )
 
 add_hlsl_shader(GraphicsTest JcabD3D.hlsl "cs_6_0" MipGenerationPass MipGenerationPassShader)
 

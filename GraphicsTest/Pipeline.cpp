@@ -3,15 +3,18 @@
 
 #include "Pipeline.h"
 
-#include "VisibilityVSShader.h"
-#include "VisibilityPSShader.h"
-#include "MsaaGatherPassShader.h"
-#include "ComputableGatherPassShader.h"
-#include "ColorPassShader.h"
-#include "PostprocessShader.h"
-#include "ResolveVSShader.h"
-#include "ResolvePSShader.h"
+#include "VisDefMsaaPipeline_VisibilityVSShader.h"
+#include "VisDefMsaaPipeline_VisibilityPSShader.h"
+#include "VisDefMsaaPipeline_MsaaGatherPassShader.h"
+#include "VisDefMsaaPipeline_ComputableGatherPassShader.h"
+#include "VisDefMsaaPipeline_ColorPassShader.h"
+#include "VisDefMsaaPipeline_PostprocessShader.h"
+#include "VisDefMsaaPipeline_ResolveVSShader.h"
+#include "VisDefMsaaPipeline_ResolvePSShader.h"
 
+
+namespace VisDefMsaaPipeline
+{
 
 RenderPipelineAssets::RenderPipelineAssets(RenderDevice& renderDevice)
 {
@@ -87,8 +90,8 @@ VisibilityPass::VisibilityPass(RenderDevice& renderDevice)
             .RootSignature         { RootSignature },
             .TopologyType          = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
             .InputLayout           = Vertex::InputLayout<Vertex::Input<SV_Position, DXGI_FORMAT_R32G32B32_FLOAT, 0>>{},
-            .VS                    = std::span{VisibilityVSShader},
-            .PS                    = std::span{VisibilityPSShader},
+            .VS                    = std::span{VisDefMsaaPipeline_VisibilityVSShader},
+            .PS                    = std::span{VisDefMsaaPipeline_VisibilityPSShader},
             .DepthStencilState     = DefaultDepthStencilDesc,
             .Multisampling         = Pipeline::Multisampling<8>,
             .RTVFormats            { DXGI_FORMAT_R32_UINT, },
@@ -159,7 +162,7 @@ MsaaGatherPass::MsaaGatherPass(RenderDevice& renderDevice)
     PipelineState = renderDevice.Create(Compute::State
         {
             .RootSignature{ RootSignature },
-            .CS           = std::span{MsaaGatherPassShader},
+            .CS           = std::span{VisDefMsaaPipeline_MsaaGatherPassShader},
         }
     );
 }
@@ -201,7 +204,7 @@ ComputableGatherPass::ComputableGatherPass(RenderDevice& renderDevice)
     PipelineState = renderDevice.Create(Compute::State
         {
             .RootSignature{ RootSignature },
-            .CS           = std::span{ComputableGatherPassShader},
+            .CS           = std::span{VisDefMsaaPipeline_ComputableGatherPassShader},
         }
     );
 }
@@ -252,7 +255,7 @@ ColorPass::ColorPass(RenderDevice& renderDevice)
     PipelineState = renderDevice.Create(Compute::State
         {
             .RootSignature{ RootSignature },
-            .CS           { std::span{ColorPassShader} },
+            .CS           { std::span{VisDefMsaaPipeline_ColorPassShader} },
         }
     );
 }
@@ -304,7 +307,7 @@ PostprocessPass::PostprocessPass(RenderDevice& renderDevice)
     PipelineState = renderDevice.Create(Compute::State
         {
             .RootSignature{ RootSignature },
-            .CS           = std::span{PostprocessShader},
+            .CS           = std::span{VisDefMsaaPipeline_PostprocessShader},
         }
     );
 }
@@ -344,8 +347,8 @@ ResolvePass::ResolvePass(RenderDevice& renderDevice)
         {
             .RootSignature         { RootSignature },
             .TopologyType          = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-            .VS                    = std::span{ResolveVSShader},
-            .PS                    = std::span{ResolvePSShader},
+            .VS                    = std::span{VisDefMsaaPipeline_ResolveVSShader},
+            .PS                    = std::span{VisDefMsaaPipeline_ResolvePSShader},
             .DepthStencilState     = Pipeline::NoDepthStencil,
             .Multisampling         = Pipeline::NoMultisampling,
             .RTVFormats            { DXGI_FORMAT_R8G8B8A8_UNORM, },
@@ -420,3 +423,6 @@ void RenderPipeline::Render(RenderDevice& renderDevice, TextureManager const& te
 
     resolvePass.Render(renderDevice, assets);
 }
+
+}
+// namespace VisDefMsaaPipeline
