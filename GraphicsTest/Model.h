@@ -74,6 +74,9 @@ struct InstanceAttributes
 {
     XMFLOAT4X4 View;
     XMFLOAT4X4 Projection;
+
+    XMFLOAT4X4 InverseViewAndLastFrameView;
+
     uint32_t   ModelIndex;
     uint32_t   Padding[3];
 };
@@ -257,6 +260,8 @@ struct Instance
     uint16_t Yaw   = 0;
     uint16_t Pitch = 0;
     uint16_t Roll  = 0;
+
+    XMMATRIX View;
 };
 
 struct InstanceManager

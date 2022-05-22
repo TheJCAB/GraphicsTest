@@ -252,7 +252,7 @@ RenderDevice RenderDevice::Create(HWND const hwnd, uint32_t const width, uint32_
 
         D3D12_RENDER_TARGET_VIEW_DESC const rtvDesc
         {
-            .Format        = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            .Format        = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, // TODO: ADD SRGB to swapChainDesc.Format as appropriate.
             .ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D,
         };
 
@@ -274,7 +274,7 @@ RenderDevice RenderDevice::Create(HWND const hwnd, uint32_t const width, uint32_
 
         D3D12_SHADER_RESOURCE_VIEW_DESC const srvDesc
         {
-            .Format                  = swapChainDesc.Format,
+            .Format                  = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, // TODO: ADD SRGB to swapChainDesc.Format as appropriate.
             .ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D,
             .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
             .Texture2D               { .MipLevels = 1 },
@@ -288,6 +288,7 @@ RenderDevice RenderDevice::Create(HWND const hwnd, uint32_t const width, uint32_
         }
     }
 
+    renderDevice.previousFrameIndex =
     renderDevice.frameIndex = renderDevice.swapChain->GetCurrentBackBufferIndex();
 
     // Create synchronization objects.
@@ -433,6 +434,7 @@ void RenderDevice::PresentFrame()
     auto const currentFenceValue = frameFenceValues[frameIndex] = fence->SignalOnGpu();
 
     // Update the frame index.
+    previousFrameIndex = frameIndex;
     frameIndex = swapChain->GetCurrentBackBufferIndex();
 
     // If the next frame is not ready to be rendered yet, wait until it is ready.

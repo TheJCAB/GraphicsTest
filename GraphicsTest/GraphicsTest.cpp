@@ -441,6 +441,9 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPara
             case VK_SPACE:
                 g_animate = !g_animate;
                 break;
+            case 'P':
+                VisDefPipeline::g_forgetCurrentFrame = !VisDefPipeline::g_forgetCurrentFrame;
+                break;
             case '1':
                 g_pipeline = g_pipeline1;
                 break;
@@ -579,6 +582,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
     uint32_t height = 1080;
     //uint32_t width  = 1280;
     //uint32_t height =  720;
+    //uint32_t width  =  384;
+    //uint32_t height =  216;
 
     RECT windowRect{ 0, 0, static_cast<int>(width), static_cast<int>(height) };
     AdjustWindowRect(&windowRect, WS_OVERLAPPEDWINDOW, FALSE);

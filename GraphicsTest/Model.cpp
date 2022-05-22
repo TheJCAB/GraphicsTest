@@ -276,10 +276,17 @@ void UpdateModelInstance(RenderDevice const& renderDevice, InstanceManager& inst
     XMMATRIX const modelMatrix = XMMatrixRotationRollPitchYaw(instance.Pitch * (2.0f * XM_PI / 65536.0f), instance.Yaw * (2.0f * XM_PI / 65536.0f), instance.Roll * (2.0f * XM_PI / 65536.0));
     XMMATRIX const translation = XMMatrixTranslation(2, 0, 0);
 
+    auto const view        = modelMatrix * translation * View;
+    auto const projection  = modelMatrix * translation * ViewProj;
+    auto const inverseView = XMMatrixInverse(nullptr, view);
+
     auto& attributes = instanceManager.GetCurrentFrameInstanceAttributes(renderDevice, instanceId);
-    XMStoreFloat4x4(&attributes.View      , XMMatrixTranspose(modelMatrix * translation * View    ));
-    XMStoreFloat4x4(&attributes.Projection, XMMatrixTranspose(modelMatrix * translation * ViewProj));
-};
+    XMStoreFloat4x4(&attributes.View      , XMMatrixTranspose(view      ));
+    XMStoreFloat4x4(&attributes.Projection, XMMatrixTranspose(projection));
+    XMStoreFloat4x4(&attributes.InverseViewAndLastFrameView, XMMatrixTranspose(inverseView * instance.View));
+
+    instance.View = view;
+}
 
 void UpdateStaticModelInstance(RenderDevice const& renderDevice, InstanceManager& instanceManager, Instance::Id const instanceId)
 {
@@ -287,7 +294,7 @@ void UpdateStaticModelInstance(RenderDevice const& renderDevice, InstanceManager
 
     if (g_animate)
     {
-        instance.Yaw += 5;
+        instance.Yaw += 500;
     }
 
     XMMATRIX const modelMatrix = XMMatrixRotationRollPitchYaw(instance.Pitch * (2.0f * XM_PI / 65536.0f), instance.Yaw * (2.0f * XM_PI / 65536.0f), instance.Roll * (2.0f * XM_PI / 65536.0));
@@ -295,7 +302,14 @@ void UpdateStaticModelInstance(RenderDevice const& renderDevice, InstanceManager
     XMMATRIX const scaling = XMMatrixScaling(instance.Scale, instance.Scale, instance.Scale);
     XMMATRIX const translation = XMMatrixTranslationFromVector(instance.Pos);
 
+    auto const view        = scaling * modelMatrix * translation * View;
+    auto const projection  = scaling * modelMatrix * translation * ViewProj;
+    auto const inverseView = XMMatrixInverse(nullptr, view);
+
     auto& attributes = instanceManager.GetCurrentFrameInstanceAttributes(renderDevice, instanceId);
-    XMStoreFloat4x4(&attributes.View      , XMMatrixTranspose(scaling * modelMatrix * translation * View    ));
-    XMStoreFloat4x4(&attributes.Projection, XMMatrixTranspose(scaling * modelMatrix * translation * ViewProj));
-};
+    XMStoreFloat4x4(&attributes.View      , XMMatrixTranspose(view      ));
+    XMStoreFloat4x4(&attributes.Projection, XMMatrixTranspose(projection));
+    XMStoreFloat4x4(&attributes.InverseViewAndLastFrameView, XMMatrixTranspose(inverseView * instance.View));
+
+    instance.View = view;
+}

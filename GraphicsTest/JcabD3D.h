@@ -138,6 +138,7 @@ struct RenderDevice
 
     UINT64              frameFenceValues[FrameCount];
     UINT                frameIndex;
+    UINT                previousFrameIndex = 0;
 
     std::shared_ptr<GpuSignalingFence> fence;
 

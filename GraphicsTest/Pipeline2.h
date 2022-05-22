@@ -26,11 +26,17 @@
 #if !HLSL
 namespace VisDefPipeline
 {
+
+inline bool g_forgetCurrentFrame = false;
+
 #endif // !HLSL
 
 struct SceneConstants
 {
     XMUINT2  Size;
+
+    XMFLOAT2 PixelOffset;
+    XMFLOAT2 NormalizedPixelOffset;
 
     // ViewPos.xy / z projected into [0..width, 0..height] screen space
     XMFLOAT2 ProjectionScale;
@@ -39,15 +45,22 @@ struct SceneConstants
     XMFLOAT2 InverseProjectionScale;
     XMFLOAT2 InverseProjectionBias ;
 
-    // ViewPos.xy / z projected into [0..1, 0..1] normalized space
-    XMFLOAT2 NormalizedProjectionScale;
-    XMFLOAT2 NormalizedProjectionBias ;
+    XMFLOAT2 CenterProjectionScale;
+    XMFLOAT2 CenterProjectionBias ;
 
-    XMFLOAT2 InverseNormalizedProjectionScale;
-    XMFLOAT2 InverseNormalizedProjectionBias ;
+    XMFLOAT2 InverseCenterProjectionScale;
+    XMFLOAT2 InverseCenterProjectionBias ;
+
+    XMFLOAT2 LastFrameProjectionScale;
+    XMFLOAT2 LastFrameProjectionBias ;
+
+    XMFLOAT2 LastFrameInverseProjectionScale;
+    XMFLOAT2 LastFrameInverseProjectionBias ;
 
     XMFLOAT2 InverseAspectRatio;
     XMFLOAT2 AspectRatio       ;
+
+    uint32_t ForgetCurrentFrame;
 };
 
 
@@ -55,18 +68,25 @@ struct SceneConstants
 
 struct RenderPipelineAssets
 {
-    IntermediateRenderTarget    VisibilityBuffer;
-    IntermediateDepthBuffer     DepthBuffer;
+    IntermediateRenderTarget    VisibilityBuffer[2];
+    IntermediateDepthBuffer     DepthBuffer[2];
+
+    IntermediateRenderTarget TaaColorBuffer[2];
+    UINT                     TaaColorBufferUav[2]{};
 
     IntermediateRenderTarget ColorBuffer;
-    UINT                     ColorBufferUav = 0;
+    UINT                     ColorBufferUav{};
 
     CpuAccessibleBuffer<SceneConstants> SceneConstantsBuffer[FrameCount];
 
     RenderPipelineAssets(RenderDevice&);
 };
 
-
+struct FrameParameters
+{
+    uint32_t previousFlipIndex = 0;
+    uint32_t flipIndex         = 0;
+};
 
 struct VisibilityPass
 {
@@ -75,7 +95,7 @@ struct VisibilityPass
 
     VisibilityPass(RenderDevice& renderDevice);
 
-    void Render(RenderDevice const&, ModelManager const&, InstanceManager const&, RenderPipelineAssets const&) const;
+    void Render(RenderDevice const&, FrameParameters const&, ModelManager const&, InstanceManager const&, RenderPipelineAssets const&) const;
 };
 
 struct ColorPass
@@ -85,7 +105,7 @@ struct ColorPass
 
     ColorPass(RenderDevice& renderDevice);
 
-    void Render(RenderDevice const&, TextureManager const&, MaterialManager const&, ModelManager const&, InstanceManager const&, RenderPipelineAssets const&) const;
+    void Render(RenderDevice const&, FrameParameters const&, TextureManager const&, MaterialManager const&, ModelManager const&, InstanceManager const&, RenderPipelineAssets const&) const;
 };
 
 struct PostprocessPass
@@ -95,7 +115,7 @@ struct PostprocessPass
 
     PostprocessPass(RenderDevice& renderDevice);
 
-    void Render(RenderDevice const&, RenderPipelineAssets const&) const;
+    void Render(RenderDevice const&, FrameParameters const&, InstanceManager const&, RenderPipelineAssets const&) const;
 };
 
 struct ResolvePass
@@ -105,7 +125,7 @@ struct ResolvePass
 
     ResolvePass(RenderDevice& renderDevice);
 
-    void Render(RenderDevice const&, RenderPipelineAssets const&) const;
+    void Render(RenderDevice const&, FrameParameters const&, RenderPipelineAssets const&) const;
 };
 
 
@@ -117,6 +137,8 @@ struct RenderPipeline : IRenderPipeline
     ColorPass            colorPass;
     PostprocessPass      postprocessPass;
     ResolvePass          resolvePass;
+
+    FrameParameters currentFrameParams;
 
     RenderPipeline(RenderDevice&);
 

@@ -351,7 +351,7 @@ ResolvePass::ResolvePass(RenderDevice& renderDevice)
             .PS                    = std::span{VisDefMsaaPipeline_ResolvePSShader},
             .DepthStencilState     = Pipeline::NoDepthStencil,
             .Multisampling         = Pipeline::NoMultisampling,
-            .RTVFormats            { DXGI_FORMAT_R8G8B8A8_UNORM, },
+            .RTVFormats            { DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, },
         }
     );
 }
