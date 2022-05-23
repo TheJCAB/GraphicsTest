@@ -336,7 +336,7 @@ inline ConstantBuffer<T, Count> ConstantBuffer<T, Count>::Create(ComRef<ID3D12De
     result.pResource = CreateUploadConstantBuffer(device, sizeof(std::array<T, Count>), initState);
 
     // We don't unmap this until the app closes. Keeping buffer mapped for the lifetime of the resource is okay.
-    D3D12_RANGE const readRange{ .Begin = 0, .End = 0 }; // We do not intend to read from this resource on the CPU.
+    D3D12_RANGE const readRange{ .Begin = 0, .End = sizeof(std::array<T, Count>) }; // We do intend to read from this resource on the CPU.
     T* pBuffer = nullptr;
     ThrowIfFailed(result.pResource->Map(0, &readRange, reinterpret_cast<void**>(&pBuffer)));
     result.pBuffer = std::span{ pBuffer, Count };
@@ -568,13 +568,19 @@ struct Shader
 ComPtr<ID3DBlob> Compile(Shader const&);
 
 
+namespace Semantic
+{
 
 struct SV_Position { static constexpr char Name[] = "SV_Position"; static constexpr uint32_t Index = 0; };
+struct UV          { static constexpr char Name[] = "UV"         ; static constexpr uint32_t Index = 0; };
+
+}
+//namespace Semantic
 
 namespace Vertex
 {
 
-template < typename Semantic, DXGI_FORMAT Format, uint32_t OffsetInBytes >
+template < typename Semantic, DXGI_FORMAT Format, uint32_t OffsetInBytes, uint32_t bufferIndex = 0 >
 struct Input
 {
     static constexpr D3D12_INPUT_ELEMENT_DESC Desc
@@ -582,6 +588,7 @@ struct Input
         .SemanticName      = Semantic::Name,
         .SemanticIndex     = Semantic::Index,
         .Format            = Format,
+        .InputSlot         = bufferIndex,
         .AlignedByteOffset = OffsetInBytes,
         .InputSlotClass    = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
     };

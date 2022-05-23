@@ -57,6 +57,7 @@ Texture::Id TextureManager::AllocateNewTexture(RenderDevice& renderDevice, Asset
             }
         }
     );
+    TextureList[index].HasAlpha = (pixelFormat & PixelFormatAlpha) != 0;
 
     bitmap->UnlockBits(&bitmapData);
 
@@ -107,6 +108,10 @@ Material::Id MaterialManager::AllocateNewMaterial(RenderDevice& renderDevice, As
     if (!material.DiffuseTexturePathName.empty())
     {
         params.DiffuseTextureId = textureManager.AllocateNewTexture(renderDevice, assetUploader, material.DiffuseTexturePathName);
+        if (textureManager.GetTexture(params.DiffuseTextureId).HasAlpha)
+        {
+            params.Flags |= MATERIAL_FLAG_ALPHATEST;
+        }
     }
     else
     {
@@ -118,7 +123,7 @@ Material::Id MaterialManager::AllocateNewMaterial(RenderDevice& renderDevice, As
 
 
 
-Model CreateModel(AssetUploader& uploader, RenderDevice& renderDevice, ModelTrianglesDefinition const& triangles, ModelVerticesDefinition const& vertices)
+Model CreateModel(AssetUploader& uploader, RenderDevice& renderDevice, ModelTrianglesDefinition const& triangles, ModelVerticesDefinition const& vertices, bool const usesAlphaTest)
 {
     Model model{};
 
@@ -155,12 +160,18 @@ Model CreateModel(AssetUploader& uploader, RenderDevice& renderDevice, ModelTria
         }
     );
 
+    model.VertexAttributesBufferView.BufferLocation = model.VertexAttributesBuffer->GetGPUVirtualAddress();
+    model.VertexAttributesBufferView.StrideInBytes  = sizeof(VertexAttributes);
+    model.VertexAttributesBufferView.SizeInBytes    = sizeof(VertexAttributes) * vertices.Count;
+
     model.TriangleParametersBuffer = uploader.CreateStaticBuffer(sizeof(TriangleParameters) * triangles.Count, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
         [&](void* p)
         {
             triangles.ParametersFiller(static_cast<TriangleParameters*>(p));
         }
     );
+
+    model.UsesAlphaTest = usesAlphaTest;
 
     return model;
 }

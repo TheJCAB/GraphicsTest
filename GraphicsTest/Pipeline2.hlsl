@@ -19,25 +19,6 @@ StructuredBuffer<InstanceAttributes> instanceList : register(t0, space0);
 
 
 
-
-
-float4 VisibilityVS(float3 position : SV_Position) : SV_Position
-{
-    float4 result = mul(float4(position, 1), instanceList[InstanceIndex].Projection);
-    result.xy += sceneConstants.NormalizedPixelOffset * result.w;
-    return result;
-}
-
-uint VisibilityPS(uint triangleId : SV_PrimitiveID) : SV_Target
-{
-    return triangleId | ((InstanceIndex + 1) << 20);
-}
-
-
-
-
-
-
 Texture2D<uint>   visibilityMap : register(t1, space0);
 Texture2D<float>  depthMap      : register(t2, space0);
 
@@ -105,6 +86,58 @@ float3 GetBarycentric(uint modelIndex, uint3 indices, float4x4 modelToView, floa
 uint NumPixelsX() { return sceneConstants.Size.x                        ; }
 uint NumPixelsY() { return sceneConstants.Size.y                        ; }
 uint NumPixels () { return sceneConstants.Size.x * sceneConstants.Size.y; }
+
+
+
+
+float4 VisibilitySolidVS(float3 position : SV_Position) : SV_Position
+{
+    float4 result = mul(float4(position, 1), instanceList[InstanceIndex].Projection);
+    result.xy += sceneConstants.NormalizedPixelOffset * result.w;
+    return result;
+}
+
+uint VisibilitySolidPS(uint triangleId : SV_PrimitiveID) : SV_Target
+{
+    uint instanceId = InstanceIndex + 1;
+    return triangleId | (instanceId << 20);
+}
+
+
+
+
+struct AlphaTestVertexOutput
+{
+    float4 Position : SV_Position;
+    float2 Uv       : UV;
+};
+
+AlphaTestVertexOutput VisibilityAlphaTestVS(float3 position : SV_Position, float2 uv : UV)
+{
+    AlphaTestVertexOutput result;
+    result.Position = mul(float4(position, 1), instanceList[InstanceIndex].Projection);
+    result.Position.xy += sceneConstants.NormalizedPixelOffset * result.Position.w;
+    result.Uv = uv;
+    return result;
+}
+
+uint VisibilityAlphaTestPS(AlphaTestVertexOutput data, uint triangleId : SV_PrimitiveID) : SV_Target
+{
+    uint instanceId = InstanceIndex + 1;
+
+    // TODO: Individual Draw calls so the texture ID can just be a constant.
+    uint modelIndex       = instanceList  [InstanceIndex]         .ModelIndex;
+    uint materialIndex    = triangleParams[modelIndex][triangleId].MaterialIndex;
+    uint diffuseTextureId = materials     [materialIndex]         .DiffuseTextureId;
+
+    clip(textures[diffuseTextureId - 1].Sample(defaultSampler, data.Uv).a - 0.5f);
+
+    return triangleId | (instanceId << 20);
+}
+
+
+
+
 
 struct GBufferSample
 {

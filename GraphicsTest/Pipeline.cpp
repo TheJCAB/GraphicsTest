@@ -89,7 +89,7 @@ VisibilityPass::VisibilityPass(RenderDevice& renderDevice)
         {
             .RootSignature         { RootSignature },
             .TopologyType          = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-            .InputLayout           = Vertex::InputLayout<Vertex::Input<SV_Position, DXGI_FORMAT_R32G32B32_FLOAT, 0>>{},
+            .InputLayout           = Vertex::InputLayout<Vertex::Input<Semantic::SV_Position, DXGI_FORMAT_R32G32B32_FLOAT, 0>>{},
             .VS                    = std::span{VisDefMsaaPipeline_VisibilityVSShader},
             .PS                    = std::span{VisDefMsaaPipeline_VisibilityPSShader},
             .DepthStencilState     = DefaultDepthStencilDesc,

@@ -36,6 +36,14 @@
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "RelWithDebInfo"
             }
+        },
+        {
+            "name": "x64-checked",
+            "displayName": "x64 Checked",
+            "inherits": "x64-debug",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Checked"
+            }
         }
     ]
 }

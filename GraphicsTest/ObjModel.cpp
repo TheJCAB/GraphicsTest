@@ -384,6 +384,46 @@ std::vector<Model> UploadObjModel(ObjModel const& model, TextureManager& texture
 
     uint32_t vcount = 0;
 
+    auto&& snapModel =
+        [&](bool usesAlphaTest)
+        {
+            result.push_back(CreateModel(uploader, renderDevice, { triangleIndices, triangleParameters }, { vertexPositions, vertexAttributes }, usesAlphaTest));
+
+            vertices.clear();
+
+            vertexPositions.clear();
+            vertexAttributes.clear();
+
+            triangleIndices.clear();
+            triangleParameters.clear();
+
+            vcount = 0;
+        };
+
+    auto&& processTriangle =
+        [&](ObjModel::Triangle const& triangle, uint32_t materialIndex, bool usesAlphaTest)
+        {
+            auto const [ p0, t0, n0 ] = triangle.Indices[0];
+            auto const [ p1, t1, n1 ] = triangle.Indices[1];
+            auto const [ p2, t2, n2 ] = triangle.Indices[2];
+
+            auto& v0 = vertices[std::tuple{p0, t0, n0}];
+            auto& v1 = vertices[std::tuple{p1, t1, n1}];
+            auto& v2 = vertices[std::tuple{p2, t2, n2}];
+            if (v0 == 0) { v0 = ++vcount; vertexPositions.emplace_back(model.Positions[p0]); vertexAttributes.emplace_back(model.Normals[n0], model.UVs[t0], 0xFFFFFFFFu); }
+            if (v1 == 0) { v1 = ++vcount; vertexPositions.emplace_back(model.Positions[p1]); vertexAttributes.emplace_back(model.Normals[n1], model.UVs[t1], 0xFFFFFFFFu); }
+            if (v2 == 0) { v2 = ++vcount; vertexPositions.emplace_back(model.Positions[p2]); vertexAttributes.emplace_back(model.Normals[n2], model.UVs[t2], 0xFFFFFFFFu); }
+            triangleIndices   .emplace_back(TriangleIndices{v0 - 1, v2 - 1, v1 - 1});
+            triangleParameters.emplace_back(0xFFFF'FFFFu, static_cast<uint32_t>(triangleParameters.size()), materialIndex); // TODO: patch
+
+            if (triangleIndices.size() >= (0x100000 - 2))
+            {
+                snapModel(usesAlphaTest);
+            }
+        };
+
+    bool usesAlphaTest = false;
+
     for (auto const& triangle : model.Triangles)
     {
         auto& materialId = materials[triangle.Material];
@@ -402,38 +442,39 @@ std::vector<Model> UploadObjModel(ObjModel const& model, TextureManager& texture
         }
         auto const materialIndex = materialManager.GetMaterialIndex(materialId);
 
-        auto const [ p0, t0, n0 ] = triangle.Indices[0];
-        auto const [ p1, t1, n1 ] = triangle.Indices[1];
-        auto const [ p2, t2, n2 ] = triangle.Indices[2];
-
-        auto& v0 = vertices[std::tuple{p0, t0, n0}];
-        auto& v1 = vertices[std::tuple{p1, t1, n1}];
-        auto& v2 = vertices[std::tuple{p2, t2, n2}];
-        if (v0 == 0) { v0 = ++vcount; vertexPositions.emplace_back(model.Positions[p0]); vertexAttributes.emplace_back(model.Normals[n0], model.UVs[t0], 0xFFFFFFFFu); }
-        if (v1 == 0) { v1 = ++vcount; vertexPositions.emplace_back(model.Positions[p1]); vertexAttributes.emplace_back(model.Normals[n1], model.UVs[t1], 0xFFFFFFFFu); }
-        if (v2 == 0) { v2 = ++vcount; vertexPositions.emplace_back(model.Positions[p2]); vertexAttributes.emplace_back(model.Normals[n2], model.UVs[t2], 0xFFFFFFFFu); }
-        triangleIndices   .emplace_back(TriangleIndices{v0 - 1, v2 - 1, v1 - 1});
-        triangleParameters.emplace_back(0xFFFF'FFFFu, static_cast<uint32_t>(triangleParameters.size()), materialIndex); // TODO: patch
-
-        if (triangleIndices.size() >= (0x100000 - 2))
+        if ((materialManager.MaterialList[materialManager.GetMaterialIndex(materialId)].Flags & MATERIAL_FLAG_ALPHATEST) == 0)
         {
-            result.push_back(CreateModel(uploader, renderDevice, { triangleIndices, triangleParameters }, { vertexPositions, vertexAttributes }));
-
-            vertices.clear();
-
-            vertexPositions.clear();
-            vertexAttributes.clear();
-
-            triangleIndices.clear();
-            triangleParameters.clear();
-
-            vcount = 0;
+            processTriangle(triangle, materialIndex, false);
+        }
+        else
+        {
+            usesAlphaTest = true;
         }
     }
 
     if (!triangleIndices.empty())
     {
-        result.push_back(CreateModel(uploader, renderDevice, { triangleIndices, triangleParameters }, { vertexPositions, vertexAttributes }));
+        snapModel(false);
+    }
+
+    if (usesAlphaTest)
+    {
+        for (auto const& triangle : model.Triangles)
+        {
+            auto& materialId = materials[triangle.Material];
+            assert(materialId != Material::Id::Invalid);
+            auto const materialIndex = materialManager.GetMaterialIndex(materialId);
+
+            if ((materialManager.MaterialList[materialManager.GetMaterialIndex(materialId)].Flags & MATERIAL_FLAG_ALPHATEST) != 0)
+            {
+                processTriangle(triangle, materialIndex, true);
+            }
+        }
+
+        if (!triangleIndices.empty())
+        {
+            snapModel(true);
+        }
     }
 
     return result;

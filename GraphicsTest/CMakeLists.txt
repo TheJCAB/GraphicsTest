@@ -56,12 +56,14 @@ add_hlsl_shader(GraphicsTest Pipeline.hlsl "cs_6_0" Postprocess          VisDefM
 add_hlsl_shader(GraphicsTest Pipeline.hlsl "vs_6_0" ResolveVS            VisDefMsaaPipeline_ResolveVSShader           )
 add_hlsl_shader(GraphicsTest Pipeline.hlsl "ps_6_0" ResolvePS            VisDefMsaaPipeline_ResolvePSShader           )
 
-add_hlsl_shader(GraphicsTest Pipeline2.hlsl "vs_6_0" VisibilityVS         VisDefPipeline_VisibilityVSShader        )
-add_hlsl_shader(GraphicsTest Pipeline2.hlsl "ps_6_0" VisibilityPS         VisDefPipeline_VisibilityPSShader        )
-add_hlsl_shader(GraphicsTest Pipeline2.hlsl "cs_6_0" ColorPass            VisDefPipeline_ColorPassShader           )
-add_hlsl_shader(GraphicsTest Pipeline2.hlsl "cs_6_0" Postprocess          VisDefPipeline_PostprocessShader         )
-add_hlsl_shader(GraphicsTest Pipeline2.hlsl "vs_6_0" ResolveVS            VisDefPipeline_ResolveVSShader           )
-add_hlsl_shader(GraphicsTest Pipeline2.hlsl "ps_6_0" ResolvePS            VisDefPipeline_ResolvePSShader           )
+add_hlsl_shader(GraphicsTest Pipeline2.hlsl "vs_6_0" VisibilitySolidVS     VisDefPipeline_VisibilitySolidVSShader    )
+add_hlsl_shader(GraphicsTest Pipeline2.hlsl "ps_6_0" VisibilitySolidPS     VisDefPipeline_VisibilitySolidPSShader    )
+add_hlsl_shader(GraphicsTest Pipeline2.hlsl "vs_6_0" VisibilityAlphaTestVS VisDefPipeline_VisibilityAlphaTestVSShader)
+add_hlsl_shader(GraphicsTest Pipeline2.hlsl "ps_6_0" VisibilityAlphaTestPS VisDefPipeline_VisibilityAlphaTestPSShader)
+add_hlsl_shader(GraphicsTest Pipeline2.hlsl "cs_6_0" ColorPass             VisDefPipeline_ColorPassShader            )
+add_hlsl_shader(GraphicsTest Pipeline2.hlsl "cs_6_0" Postprocess           VisDefPipeline_PostprocessShader          )
+add_hlsl_shader(GraphicsTest Pipeline2.hlsl "vs_6_0" ResolveVS             VisDefPipeline_ResolveVSShader            )
+add_hlsl_shader(GraphicsTest Pipeline2.hlsl "ps_6_0" ResolvePS             VisDefPipeline_ResolvePSShader            )
 
 add_hlsl_shader(GraphicsTest JcabD3D.hlsl "cs_6_0" MipGenerationPass MipGenerationPassShader)
 

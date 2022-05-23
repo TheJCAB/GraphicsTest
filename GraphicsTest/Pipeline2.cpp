@@ -3,8 +3,10 @@
 
 #include "Pipeline2.h"
 
-#include "VisDefPipeline_VisibilityVSShader.h"
-#include "VisDefPipeline_VisibilityPSShader.h"
+#include "VisDefPipeline_VisibilitySolidVSShader.h"
+#include "VisDefPipeline_VisibilitySolidPSShader.h"
+#include "VisDefPipeline_VisibilityAlphaTestVSShader.h"
+#include "VisDefPipeline_VisibilityAlphaTestPSShader.h"
 #include "VisDefPipeline_ColorPassShader.h"
 #include "VisDefPipeline_PostprocessShader.h"
 #include "VisDefPipeline_ResolveVSShader.h"
@@ -52,34 +54,56 @@ VisibilityPass::VisibilityPass(RenderDevice& renderDevice)
         Root::Signature<
             Root::Cbv<      D3D12_SHADER_VISIBILITY_ALL,                   0,    0 >,
             Root::Constants<D3D12_SHADER_VISIBILITY_ALL   ,                0,    1, 1 >, // Instance constant
-            Root::Table    <D3D12_SHADER_VISIBILITY_VERTEX, Root::SrvRange<0, 1, 0>>,    // Instance buffer
+            Root::Table    <D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<0, 1, 0>>,    // Instance buffer
+            Root::Table    <D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS   , 2>>, // Triangle paramters
+            Root::Table    <D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_TEXTURES            , 5>>, // Textures
+            Root::Srv      <D3D12_SHADER_VISIBILITY_ALL,                0,                           5 >, // Materials
+            Root::Table    <D3D12_SHADER_VISIBILITY_ALL, Root::SamplerRange<0, 1, 0>>,
             Root::Flags    <D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT>
         >{}
     );
 
     // Create the pipeline state, which includes compiling and loading shaders.
-    PipelineState = renderDevice.Create(Pipeline::State
+    SolidPipelineState = renderDevice.Create(Pipeline::State
         {
             .RootSignature         { RootSignature },
             .TopologyType          = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-            .InputLayout           = Vertex::InputLayout<Vertex::Input<SV_Position, DXGI_FORMAT_R32G32B32_FLOAT, 0>>{},
-            .VS                    = std::span{VisDefPipeline_VisibilityVSShader},
-            .PS                    = std::span{VisDefPipeline_VisibilityPSShader},
+            .InputLayout           = Vertex::InputLayout<Vertex::Input<Semantic::SV_Position, DXGI_FORMAT_R32G32B32_FLOAT, 0>>{},
+            .VS                    = std::span{VisDefPipeline_VisibilitySolidVSShader},
+            .PS                    = std::span{VisDefPipeline_VisibilitySolidPSShader},
             .DepthStencilState     = DefaultDepthStencilDesc,
-            .Multisampling         = Pipeline::Multisampling<8>,
+            .Multisampling         = Pipeline::NoMultisampling,
+            .RTVFormats            { DXGI_FORMAT_R32_UINT, },
+            .DSVFormat             = DXGI_FORMAT_D32_FLOAT,
+        }
+    );
+
+    // Create the pipeline state, which includes compiling and loading shaders.
+    AlphaTestPipelineState = renderDevice.Create(Pipeline::State
+        {
+            .RootSignature         { RootSignature },
+            .TopologyType          = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+            .InputLayout           = Vertex::InputLayout<
+                                        Vertex::Input<Semantic::SV_Position, DXGI_FORMAT_R32G32B32_FLOAT, 0                             , 0>,
+                                        Vertex::Input<Semantic::UV         , DXGI_FORMAT_R32G32_FLOAT   , offsetof(VertexAttributes, UV), 1>
+                                    >{},
+            .VS                    = std::span{VisDefPipeline_VisibilityAlphaTestVSShader},
+            .PS                    = std::span{VisDefPipeline_VisibilityAlphaTestPSShader},
+            .DepthStencilState     = DefaultDepthStencilDesc,
+            .Multisampling         = Pipeline::NoMultisampling,
             .RTVFormats            { DXGI_FORMAT_R32_UINT, },
             .DSVFormat             = DXGI_FORMAT_D32_FLOAT,
         }
     );
 }
 
-void VisibilityPass::Render(RenderDevice const& renderDevice, FrameParameters const& frameParameters, ModelManager const& modelManager, InstanceManager const& instanceManager, RenderPipelineAssets const& assets) const
+void VisibilityPass::Render(RenderDevice const& renderDevice, FrameParameters const& frameParameters, TextureManager const& textureManager, MaterialManager const&materialManager, ModelManager const& modelManager, InstanceManager const& instanceManager, RenderPipelineAssets const& assets) const
 {
     renderDevice.commandList->SetGraphicsRootSignature(RootSignature.Get());
-    renderDevice.commandList->SetPipelineState        (PipelineState.Get());
+    renderDevice.commandList->SetPipelineState        (SolidPipelineState.Get());
 
-    ID3D12DescriptorHeap* const heaps[]{ renderDevice.srvDescriptorHeap };
-    renderDevice.commandList->SetDescriptorHeaps(1, heaps);
+    ID3D12DescriptorHeap* const heaps[]{ renderDevice.srvDescriptorHeap, renderDevice.samplerDescriptorHeap };
+    renderDevice.commandList->SetDescriptorHeaps(2, heaps);
 
     auto& visibilityBuffer = assets.VisibilityBuffer[frameParameters.flipIndex];
     auto& depthBuffer      = assets.DepthBuffer     [frameParameters.flipIndex];
@@ -102,6 +126,12 @@ void VisibilityPass::Render(RenderDevice const& renderDevice, FrameParameters co
     renderDevice.commandList->SetGraphicsRootConstantBufferView(0, assets.SceneConstantsBuffer[renderDevice.frameIndex].Buffer->GetGPUVirtualAddress());
     renderDevice.commandList->SetGraphicsRootDescriptorTable   (2, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(instanceManager.GetCurrentFrameInstanceAttributes(renderDevice).SrvIndex));
 
+    renderDevice.commandList->SetGraphicsRootDescriptorTable( 3, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(modelManager  .GetTriangleParametersDescriptorTable()));
+    renderDevice.commandList->SetGraphicsRootDescriptorTable( 4, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(textureManager.GetTexturesDescriptorTable          ()));
+
+    renderDevice.commandList->SetGraphicsRootShaderResourceView(5, materialManager.MaterialList.pResource->GetGPUVirtualAddress());
+    renderDevice.commandList->SetGraphicsRootDescriptorTable(6, renderDevice.samplerDescriptorHeap.GetGpuDescriptorHandle(0)); // TODO Samplers
+
     for (auto instanceId : instanceManager)
     {
         auto& instance = instanceManager.GetInstance(instanceId);
@@ -110,11 +140,35 @@ void VisibilityPass::Render(RenderDevice const& renderDevice, FrameParameters co
             continue;
         }
         auto& model = modelManager.GetModel(instance.ModelId);
-        renderDevice.commandList->IASetPrimitiveTopology      (D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        renderDevice.commandList->IASetIndexBuffer            (&model.TriangleIndicesView);
-        renderDevice.commandList->IASetVertexBuffers          (0, 1, &model.VertexPositionsBufferView);
-        renderDevice.commandList->SetGraphicsRoot32BitConstant(1, instanceManager.GetInstanceIndex(instanceId), 0);
-        renderDevice.commandList->DrawIndexedInstanced        (model.TriangleCount * 3, 1, 0, 0, 0);
+        if (!model.UsesAlphaTest)
+        {
+            renderDevice.commandList->IASetPrimitiveTopology      (D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            renderDevice.commandList->IASetIndexBuffer            (&model.TriangleIndicesView);
+            renderDevice.commandList->IASetVertexBuffers          (0, 1, &model.VertexPositionsBufferView);
+            renderDevice.commandList->SetGraphicsRoot32BitConstant(1, instanceManager.GetInstanceIndex(instanceId), 0);
+            renderDevice.commandList->DrawIndexedInstanced        (model.TriangleCount * 3, 1, 0, 0, 0);
+        }
+    }
+
+    renderDevice.commandList->SetPipelineState(AlphaTestPipelineState.Get());
+
+    for (auto instanceId : instanceManager)
+    {
+        auto& instance = instanceManager.GetInstance(instanceId);
+        if (instance.ModelId == Model::Id::Invalid)
+        {
+            continue;
+        }
+        auto& model = modelManager.GetModel(instance.ModelId);
+        if (model.UsesAlphaTest)
+        {
+            renderDevice.commandList->IASetPrimitiveTopology      (D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            renderDevice.commandList->IASetIndexBuffer            (&model.TriangleIndicesView);
+            renderDevice.commandList->IASetVertexBuffers          (0, 1, &model.VertexPositionsBufferView);
+            renderDevice.commandList->IASetVertexBuffers          (1, 1, &model.VertexAttributesBufferView);
+            renderDevice.commandList->SetGraphicsRoot32BitConstant(1, instanceManager.GetInstanceIndex(instanceId), 0);
+            renderDevice.commandList->DrawIndexedInstanced        (model.TriangleCount * 3, 1, 0, 0, 0);
+        }
     }
 
     TransitionResource(renderDevice.commandList, visibilityBuffer.Resource, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
@@ -130,12 +184,12 @@ ColorPass::ColorPass(RenderDevice& renderDevice)
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, 1,                        0>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<2, 1,                        0>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<0, 1,                        0>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS   , 1>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS   , 2>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS   , 3>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS   , 4>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MATERIAL_DEFINITIONS, 5>>,
-        Root::Srv  <D3D12_SHADER_VISIBILITY_ALL,                0,                           5 >,
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS   , 1>>, // Triangle indices
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS   , 2>>, // Triangle paramters
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS   , 3>>, // Vertex positions
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS   , 4>>, // Vertex attributes
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_TEXTURES            , 5>>, // Textures
+        Root::Srv  <D3D12_SHADER_VISIBILITY_ALL,                0,                           5 >, // Materials
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SamplerRange<0, 1, 0>>,
         Root::Flags<D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT>
     >();
@@ -349,7 +403,7 @@ void RenderPipeline::Render(RenderDevice& renderDevice, TextureManager const& te
     currentFrameParams.previousFlipIndex = currentFrameParams.flipIndex;
     currentFrameParams.flipIndex = (currentFrameParams.flipIndex + 1) % 2;
 
-    visibilityPass      .Render(renderDevice, currentFrameParams,                                  modelManager, instanceManager, assets);
+    visibilityPass      .Render(renderDevice, currentFrameParams, textureManager, materialManager, modelManager, instanceManager, assets);
     colorPass           .Render(renderDevice, currentFrameParams, textureManager, materialManager, modelManager, instanceManager, assets);
 
     postprocessPass.Render(renderDevice, currentFrameParams, instanceManager, assets);

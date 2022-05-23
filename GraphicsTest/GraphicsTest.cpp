@@ -125,7 +125,7 @@ Model CreateCubeModel(uint32_t materialIndex, AssetUploader& uploader, RenderDev
         { 0xFFFFFF00u, 5, materialIndex },
     };
 
-    return CreateModel(uploader, renderDevice, { indices, triangleParams }, { triangleVertices, vertexAttributes });
+    return CreateModel(uploader, renderDevice, { indices, triangleParams }, { triangleVertices, vertexAttributes }, false);
 }
 
 

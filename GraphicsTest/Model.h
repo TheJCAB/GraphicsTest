@@ -42,6 +42,7 @@ enum TextureId : uint32_t { Invalid = 0 };
 #define MAX_MATERIAL_DEFINITIONS 1000
 #define MAX_TEXTURES             1000
 
+#define MATERIAL_FLAG_ALPHATEST 0x00000001
 
 struct MaterialParameters
 {
@@ -50,6 +51,7 @@ struct MaterialParameters
     XMFLOAT3  SpecularColor;
     float     SpecularExponent;
     TextureId DiffuseTextureId;
+    uint32_t  Flags;
 };
 
 typedef XMFLOAT3 VertexPosition;
@@ -101,6 +103,7 @@ struct Texture
 
     std::filesystem::path  Path;
     ComPtr<ID3D12Resource> Resource;
+    bool                   HasAlpha = false;
 };
 
 struct TextureManager
@@ -176,10 +179,13 @@ struct Model
     D3D12_INDEX_BUFFER_VIEW  TriangleIndicesView      {};
     ComPtr<ID3D12Resource>   TriangleParametersBuffer {};
 
-    uint32_t                 VertexCount              = 0;
-    ComPtr<ID3D12Resource>   VertexPositionsBuffer    {};
-    D3D12_VERTEX_BUFFER_VIEW VertexPositionsBufferView{};
-    ComPtr<ID3D12Resource>   VertexAttributesBuffer   {};
+    uint32_t                 VertexCount               = 0;
+    ComPtr<ID3D12Resource>   VertexPositionsBuffer     {};
+    D3D12_VERTEX_BUFFER_VIEW VertexPositionsBufferView {};
+    ComPtr<ID3D12Resource>   VertexAttributesBuffer    {};
+    D3D12_VERTEX_BUFFER_VIEW VertexAttributesBufferView{};
+
+    bool UsesAlphaTest = false;
 };
 
 struct ModelVerticesDefinition
@@ -216,7 +222,7 @@ struct ModelTrianglesDefinition
     }
 };
 
-Model CreateModel(AssetUploader& uploader, RenderDevice& renderDevice, ModelTrianglesDefinition const& triangles, ModelVerticesDefinition const& vertices);
+Model CreateModel(AssetUploader&, RenderDevice&, ModelTrianglesDefinition const&, ModelVerticesDefinition const&, bool usesAlphaTest);
 
 struct ModelManager
 {

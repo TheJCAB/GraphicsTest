@@ -91,11 +91,12 @@ struct FrameParameters
 struct VisibilityPass
 {
     ComPtr<ID3D12RootSignature> RootSignature;
-    ComPtr<ID3D12PipelineState> PipelineState;
+    ComPtr<ID3D12PipelineState> SolidPipelineState;
+    ComPtr<ID3D12PipelineState> AlphaTestPipelineState;
 
     VisibilityPass(RenderDevice& renderDevice);
 
-    void Render(RenderDevice const&, FrameParameters const&, ModelManager const&, InstanceManager const&, RenderPipelineAssets const&) const;
+    void Render(RenderDevice const&, FrameParameters const&, TextureManager const&, MaterialManager const&, ModelManager const&, InstanceManager const&, RenderPipelineAssets const&) const;
 };
 
 struct ColorPass
