@@ -3,6 +3,11 @@
 #
 cmake_minimum_required (VERSION 3.20)
 
+set(CMAKE_C_FLAGS_CHECKED             "/Zi /O2 /Ob1 /DNDEBUG")
+set(CMAKE_CXX_FLAGS_CHECKED           "/Zi /O2 /Ob1 /DNDEBUG")
+set(CMAKE_EXE_LINKER_FLAGS_CHECKED    "/debug /INCREMENTAL")
+set(CMAKE_SHARED_LINKER_FLAGS_CHECKED "/debug /INCREMENTAL")
+
 project ("GraphicsTest")
 
 # Include sub-projects.

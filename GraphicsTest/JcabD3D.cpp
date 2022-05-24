@@ -149,7 +149,7 @@ RenderDevice RenderDevice::Create(HWND const hwnd, uint32_t const width, uint32_
 
     UINT dxgiFactoryFlags = 0;
 
-#if defined(_DEBUG)
+#if !defined(NDEBUG)
     // Enable the debug layer (requires the Graphics Tools "optional feature").
     // NOTE: Enabling the debug layer after device creation will invalidate the active device.
     {
