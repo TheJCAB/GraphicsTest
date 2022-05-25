@@ -3,6 +3,11 @@
 
 #include "Model.h"
 
+#include "Model_VisibilitySolidVSShader.h"
+#include "Model_VisibilitySolidPSShader.h"
+#include "Model_VisibilityAlphaTestVSShader.h"
+#include "Model_VisibilityAlphaTestPSShader.h"
+
 #include <gdiplus.h>
 
 TextureManager::TextureManager(RenderDevice& renderDevice)
@@ -323,4 +328,120 @@ void UpdateStaticModelInstance(RenderDevice const& renderDevice, InstanceManager
     XMStoreFloat4x4(&attributes.InverseViewAndLastFrameView, XMMatrixTranspose(inverseView * instance.View));
 
     instance.View = view;
+}
+
+VisibilityPass::VisibilityPass(RenderDevice& renderDevice, uint32_t msaa)
+{
+    // Create the rendering root signature.
+    RootSignature = renderDevice.Create(
+        Root::Signature<
+            Root::Constants<D3D12_SHADER_VISIBILITY_ALL,                    0, 3                       , 1 >, // Instance constant
+            Root::Table    <D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange    <0, 1                       , 0>>, // Instance buffer
+            Root::Table    <D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange    <1, MAX_MODEL_DEFINITIONS   , 2>>, // Triangle paramters
+            Root::Table    <D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange    <1, MAX_TEXTURES            , 5>>, // Textures
+            Root::Srv      <D3D12_SHADER_VISIBILITY_ALL,                    0                          , 5 >, // Materials
+            Root::Table    <D3D12_SHADER_VISIBILITY_ALL, Root::SamplerRange<0, 1                       , 0>>,
+            Root::Flags    <D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT>
+        >{}
+    );
+
+    // Create the pipeline state, which includes compiling and loading shaders.
+    SolidPipelineState = renderDevice.Create(Pipeline::State
+        {
+            .RootSignature         { RootSignature },
+            .TopologyType          = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+            .InputLayout           = Vertex::InputLayout<Vertex::Input<Semantic::SV_Position, DXGI_FORMAT_R32G32B32_FLOAT, 0>>{},
+            .VS                    = std::span{Model_VisibilitySolidVSShader},
+            .PS                    = std::span{Model_VisibilitySolidPSShader},
+            .DepthStencilState     = DefaultDepthStencilDesc,
+            .Multisampling         = Pipeline::MultisamplingState{ msaa },
+            .RTVFormats            { DXGI_FORMAT_R32_UINT, },
+            .DSVFormat             = DXGI_FORMAT_D32_FLOAT,
+        }
+    );
+
+    // Create the pipeline state, which includes compiling and loading shaders.
+    AlphaTestPipelineState = renderDevice.Create(Pipeline::State
+        {
+            .RootSignature         { RootSignature },
+            .TopologyType          = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+            .InputLayout           = Vertex::InputLayout<
+                                        Vertex::Input<Semantic::SV_Position, DXGI_FORMAT_R32G32B32_FLOAT, 0                             , 0>,
+                                        Vertex::Input<Semantic::UV         , DXGI_FORMAT_R32G32_FLOAT   , offsetof(VertexAttributes, UV), 1>
+                                    >{},
+            .VS                    = std::span{Model_VisibilityAlphaTestVSShader},
+            .PS                    = std::span{Model_VisibilityAlphaTestPSShader},
+            .DepthStencilState     = DefaultDepthStencilDesc,
+            .Multisampling         = Pipeline::MultisamplingState{ msaa },
+            .RTVFormats            { DXGI_FORMAT_R32_UINT, },
+            .DSVFormat             = DXGI_FORMAT_D32_FLOAT,
+        }
+    );
+}
+
+void VisibilityPass::Render(RenderDevice const& renderDevice, SceneGraphAssets const& sceneGraphAssets, XMFLOAT2 const& normalizedPixelOffset, IntermediateRenderTarget const& visibilityBuffer, IntermediateDepthBuffer const& depthBuffer) const
+{
+    renderDevice.commandList->SetGraphicsRootSignature(RootSignature.Get());
+    renderDevice.commandList->SetPipelineState        (SolidPipelineState.Get());
+
+    ID3D12DescriptorHeap* const heaps[]{ renderDevice.srvDescriptorHeap, renderDevice.samplerDescriptorHeap };
+    renderDevice.commandList->SetDescriptorHeaps(2, heaps);
+
+    auto const rtvHandle = renderDevice.rtvDescriptorHeap.GetCpuDescriptorHandle(visibilityBuffer.RtvDescriptorIndex);
+    auto const dsvHandle = renderDevice.dsvDescriptorHeap.GetCpuDescriptorHandle(depthBuffer     .DsvDescriptorIndex);
+    renderDevice.commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
+
+    D3D12_VIEWPORT const viewport   { 0, 0, static_cast<float>(visibilityBuffer.Width), static_cast<float>(visibilityBuffer.Height), D3D12_MIN_DEPTH, D3D12_MAX_DEPTH };
+    D3D12_RECT     const scissorRect{ 0, 0, static_cast<LONG >(depthBuffer     .Width), static_cast<LONG >(depthBuffer     .Height) };
+
+    renderDevice.commandList->RSSetViewports    (1, &viewport);
+    renderDevice.commandList->RSSetScissorRects (1, &scissorRect);
+
+    renderDevice.commandList->ClearRenderTargetView(rtvHandle, visibilityBuffer.ClearColor.data(), 0, nullptr);
+    renderDevice.commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, depthBuffer.ClearValue, 0, 0, nullptr);
+    renderDevice.commandList->SetGraphicsRoot32BitConstants    (0, 2, &normalizedPixelOffset, 1);
+    renderDevice.commandList->SetGraphicsRootDescriptorTable   (1, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(sceneGraphAssets.InstanceManager.GetCurrentFrameInstanceAttributes(renderDevice).SrvIndex));
+    renderDevice.commandList->SetGraphicsRootDescriptorTable   (2, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(sceneGraphAssets.ModelManager   .GetTriangleParametersDescriptorTable()));
+    renderDevice.commandList->SetGraphicsRootDescriptorTable   (3, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(sceneGraphAssets.TextureManager .GetTexturesDescriptorTable          ()));
+    renderDevice.commandList->SetGraphicsRootShaderResourceView(4, sceneGraphAssets.MaterialManager.MaterialList.pResource->GetGPUVirtualAddress());
+    renderDevice.commandList->SetGraphicsRootDescriptorTable   (5, renderDevice.samplerDescriptorHeap.GetGpuDescriptorHandle(0)); // TODO Samplers
+
+    for (auto instanceId : sceneGraphAssets.InstanceManager)
+    {
+        auto& instance = sceneGraphAssets.InstanceManager.GetInstance(instanceId);
+        if (instance.ModelId == Model::Id::Invalid)
+        {
+            continue;
+        }
+        auto& model = sceneGraphAssets.ModelManager.GetModel(instance.ModelId);
+        if (!model.UsesAlphaTest)
+        {
+            renderDevice.commandList->IASetPrimitiveTopology      (D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            renderDevice.commandList->IASetIndexBuffer            (&model.TriangleIndicesView);
+            renderDevice.commandList->IASetVertexBuffers          (0, 1, &model.VertexPositionsBufferView);
+            renderDevice.commandList->SetGraphicsRoot32BitConstant(0, sceneGraphAssets.InstanceManager.GetInstanceIndex(instanceId), 0);
+            renderDevice.commandList->DrawIndexedInstanced        (model.TriangleCount * 3, 1, 0, 0, 0);
+        }
+    }
+
+    renderDevice.commandList->SetPipelineState(AlphaTestPipelineState.Get());
+
+    for (auto instanceId : sceneGraphAssets.InstanceManager)
+    {
+        auto& instance = sceneGraphAssets.InstanceManager.GetInstance(instanceId);
+        if (instance.ModelId == Model::Id::Invalid)
+        {
+            continue;
+        }
+        auto& model = sceneGraphAssets.ModelManager.GetModel(instance.ModelId);
+        if (model.UsesAlphaTest)
+        {
+            renderDevice.commandList->IASetPrimitiveTopology      (D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            renderDevice.commandList->IASetIndexBuffer            (&model.TriangleIndicesView);
+            renderDevice.commandList->IASetVertexBuffers          (0, 1, &model.VertexPositionsBufferView);
+            renderDevice.commandList->IASetVertexBuffers          (1, 1, &model.VertexAttributesBufferView);
+            renderDevice.commandList->SetGraphicsRoot32BitConstant(0, sceneGraphAssets.InstanceManager.GetInstanceIndex(instanceId), 0);
+            renderDevice.commandList->DrawIndexedInstanced        (model.TriangleCount * 3, 1, 0, 0, 0);
+        }
+    }
 }

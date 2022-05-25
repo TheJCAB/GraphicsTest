@@ -747,7 +747,7 @@ MipGenerationPass::MipGenerationPass(RenderDevice const& renderDevice)
 {
     // Create the rendering root signature.
     RootSignature = renderDevice.CreateRootSignature<
-        Root::Constants<D3D12_SHADER_VISIBILITY_ALL, 0, 0, 2>,
+        Root::Constants<D3D12_SHADER_VISIBILITY_ALL, 0, 2, 0>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange    <0, 1>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange    <0, 1>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SamplerRange<0, 1>>,

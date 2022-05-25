@@ -84,9 +84,20 @@ struct InstanceAttributes
 };
 
 
+#if HLSL
 
+StructuredBuffer<TriangleIndices>     indices         [MAX_MODEL_DEFINITIONS] : register(t1, space1);
+StructuredBuffer<TriangleParameters>  triangleParams  [MAX_MODEL_DEFINITIONS] : register(t1, space2);
+StructuredBuffer<VertexPosition>      vertexPositions [MAX_MODEL_DEFINITIONS] : register(t1, space3);
+StructuredBuffer<VertexAttributes>    vertexAttributes[MAX_MODEL_DEFINITIONS] : register(t1, space4);
+Texture2D<float4>                     textures        [MAX_TEXTURES         ] : register(t1, space5);
+StructuredBuffer<MaterialParameters>  materials                               : register(t0, space5);
 
-#if !HLSL
+StructuredBuffer<InstanceAttributes> instanceList : register(t0, space0);
+
+sampler defaultSampler : register(s0, space0);
+
+#else // !HLSL
 
 inline bool g_animate = false;
 
@@ -321,5 +332,43 @@ struct InstanceManager
 
 void UpdateModelInstance(RenderDevice const& renderDevice, InstanceManager& instanceManager, Instance::Id const instanceId);
 void UpdateStaticModelInstance(RenderDevice const& renderDevice, InstanceManager& instanceManager, Instance::Id const instanceId);
+
+struct SceneGraphAssets
+{
+    ::TextureManager  TextureManager ;
+    ::MaterialManager MaterialManager;
+    ::ModelManager    ModelManager   ;
+    ::InstanceManager InstanceManager;
+
+    SceneGraphAssets(RenderDevice& renderDevice)
+        : TextureManager { renderDevice }
+        , MaterialManager{ renderDevice }
+        , ModelManager   { renderDevice }
+        , InstanceManager{ renderDevice }
+    {}
+};
+
+struct VisibilityPass
+{
+    ComPtr<ID3D12RootSignature> RootSignature;
+    ComPtr<ID3D12PipelineState> SolidPipelineState;
+    ComPtr<ID3D12PipelineState> AlphaTestPipelineState;
+
+    VisibilityPass(RenderDevice&, uint32_t msaa);
+
+    void Render(RenderDevice const&, SceneGraphAssets const&, XMFLOAT2 const& normalizedPixelOffset, IntermediateRenderTarget const&, IntermediateDepthBuffer const&) const;
+};
+
+struct RootSignatureIndices
+{
+    uint32_t RootConstants;
+    uint32_t InstanceArray;
+    uint32_t TriangleParametersArray;
+    uint32_t TextureArray;
+    uint32_t MaterialsBuffer;
+    uint32_t Sampler;
+};
+
+void SetupVisibilityRootConstants(ComRef<ID3D12GraphicsCommandList>, RootSignatureIndices const&, SceneGraphAssets const&);
 
 #endif // !HLSL

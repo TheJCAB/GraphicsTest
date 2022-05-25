@@ -135,10 +135,7 @@ std::shared_ptr<IRenderPipeline> g_pipeline2;
 
 struct Assets
 {
-    std::shared_ptr<TextureManager > textureManager;
-    std::shared_ptr<MaterialManager> materialManager;
-    std::shared_ptr<ModelManager   > modelManager;
-    std::shared_ptr<InstanceManager> instanceManager;
+    std::shared_ptr<SceneGraphAssets> sceneGraphAssets;
 
     Material::Id DefaultMaterialId = Material::Id::Invalid;
 
@@ -157,24 +154,21 @@ Assets LoadAssets(RenderDevice& renderDevice)
     g_pipeline1 = std::make_shared<VisDefMsaaPipeline::RenderPipeline>(renderDevice);
     g_pipeline2 = std::make_shared<VisDefPipeline    ::RenderPipeline>(renderDevice);
 
-    assets.textureManager   = std::make_shared<TextureManager> (renderDevice);
-    assets.materialManager  = std::make_shared<MaterialManager>(renderDevice);
-    assets.modelManager     = std::make_shared<ModelManager>   (renderDevice);
-    assets.instanceManager  = std::make_shared<InstanceManager>(renderDevice);
+    assets.sceneGraphAssets = std::make_shared<SceneGraphAssets>(renderDevice);
 
-    assets.DefaultMaterialId = assets.materialManager->AllocateNewMaterial(renderDevice, uploader, *assets.textureManager,
+    assets.DefaultMaterialId = assets.sceneGraphAssets->MaterialManager.AllocateNewMaterial(renderDevice, uploader, assets.sceneGraphAssets->TextureManager,
         Material{
             .AmbientColor = { 0, 0, 0 },
             .DiffuseColor = { 1, 1, 1 },
         }
     );
 
-    assets.cube             = assets.modelManager->AllocateNewModel(renderDevice, CreateCubeModel(assets.materialManager->GetMaterialIndex(assets.DefaultMaterialId), uploader, renderDevice));
-    assets.cubeInstances[0] = assets.instanceManager->AllocateNewInstance(renderDevice, *assets.modelManager, Instance{assets.cube});
-    assets.cubeInstances[1] = assets.instanceManager->AllocateNewInstance(renderDevice, *assets.modelManager, Instance{assets.cube});
+    assets.cube             = assets.sceneGraphAssets->ModelManager.AllocateNewModel(renderDevice, CreateCubeModel(assets.sceneGraphAssets->MaterialManager.GetMaterialIndex(assets.DefaultMaterialId), uploader, renderDevice));
+    assets.cubeInstances[0] = assets.sceneGraphAssets->InstanceManager.AllocateNewInstance(renderDevice, assets.sceneGraphAssets->ModelManager, Instance{assets.cube});
+    assets.cubeInstances[1] = assets.sceneGraphAssets->InstanceManager.AllocateNewInstance(renderDevice, assets.sceneGraphAssets->ModelManager, Instance{assets.cube});
     
     {
-        auto& instance = assets.instanceManager->GetInstance(assets.cubeInstances[1]);
+        auto& instance = assets.sceneGraphAssets->InstanceManager.GetInstance(assets.cubeInstances[1]);
 
         instance.Yaw   = static_cast<uint16_t>(rand());
         instance.Pitch = static_cast<uint16_t>(rand());
@@ -187,10 +181,10 @@ Assets LoadAssets(RenderDevice& renderDevice)
     //    AddObjEdgesAndAdjacency  (objModel);
     //    AddObjModelMissingNormals(objModel);
     //
-    //    for (auto& model : UploadObjModel(objModel, *assets.textureManager, *assets.materialManager, uploader, renderDevice))
+    //    for (auto& model : UploadObjModel(objModel, assets.sceneGraphAssets->TextureManager, assets.sceneGraphAssets->MaterialManager, uploader, renderDevice))
     //    {
-    //        auto const modelId = assets.modelManager->AllocateNewModel(renderDevice, std::move(model));
-    //        assets.objModelInstances.push_back(assets.instanceManager->AllocateNewInstance(renderDevice, *assets.modelManager, Instance{modelId, 1.0f, XMVectorSet(-8, 0, 0, 0)}));
+    //        auto const modelId = assets.sceneGraphAssets->ModelManager.AllocateNewModel(renderDevice, std::move(model));
+    //        assets.objModelInstances.push_back(assets.sceneGraphAssets->InstanceManager.AllocateNewInstance(renderDevice, assets.sceneGraphAssets->ModelManager, Instance{modelId, 1.0f, XMVectorSet(-8, 0, 0, 0)}));
     //    }
     //}
 
@@ -213,10 +207,10 @@ Assets LoadAssets(RenderDevice& renderDevice)
         AddObjEdgesAndAdjacency  (objModel);
         AddObjModelMissingNormals(objModel);
     
-        for (auto& model : UploadObjModel(objModel, *assets.textureManager, *assets.materialManager, uploader, renderDevice))
+        for (auto& model : UploadObjModel(objModel, assets.sceneGraphAssets->TextureManager, assets.sceneGraphAssets->MaterialManager, uploader, renderDevice))
         {
-            auto const modelId = assets.modelManager->AllocateNewModel(renderDevice, std::move(model));
-            assets.objModelInstances.push_back(assets.instanceManager->AllocateNewInstance(renderDevice, *assets.modelManager, Instance{modelId, 1.0f, XMVectorSet(0, 0, 4, 6)}));
+            auto const modelId = assets.sceneGraphAssets->ModelManager.AllocateNewModel(renderDevice, std::move(model));
+            assets.objModelInstances.push_back(assets.sceneGraphAssets->InstanceManager.AllocateNewInstance(renderDevice, assets.sceneGraphAssets->ModelManager, Instance{modelId, 1.0f, XMVectorSet(0, 0, 4, 6)}));
         }
     }
 
@@ -239,7 +233,7 @@ void RenderFrame(RenderDevice& renderDevice, Assets const& assets)
     // re-recording.
     ThrowIfFailed(renderDevice.commandList->Reset(commandAllocator.Get(), nullptr));
 
-    g_pipeline->Render(renderDevice, *assets.textureManager, *assets.materialManager, *assets.modelManager, *assets.instanceManager);
+    g_pipeline->Render(renderDevice, *assets.sceneGraphAssets);
 
     renderDevice.PresentFrame();
 }
@@ -391,11 +385,11 @@ void AnimateAssets(RenderDevice const& renderDevice, Assets const& assets)
 
     ViewProj = View * Projection;
 
-    UpdateModelInstance(renderDevice, *assets.instanceManager, assets.cubeInstances[0]);
-    UpdateModelInstance(renderDevice, *assets.instanceManager, assets.cubeInstances[1]);
+    UpdateModelInstance(renderDevice, assets.sceneGraphAssets->InstanceManager, assets.cubeInstances[0]);
+    UpdateModelInstance(renderDevice, assets.sceneGraphAssets->InstanceManager, assets.cubeInstances[1]);
     for (auto instanceId : assets.objModelInstances)
     {
-        UpdateStaticModelInstance(renderDevice, *assets.instanceManager, instanceId);
+        UpdateStaticModelInstance(renderDevice, assets.sceneGraphAssets->InstanceManager, instanceId);
     }
 }
 

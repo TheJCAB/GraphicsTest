@@ -1,23 +1,9 @@
 
+#include "ViewSpace.lib.hlsl"
+
 #include "Pipeline2.h"
 
-StructuredBuffer<TriangleIndices>     indices         [MAX_MODEL_DEFINITIONS] : register(t1, space1);
-StructuredBuffer<TriangleParameters>  triangleParams  [MAX_MODEL_DEFINITIONS] : register(t1, space2);
-StructuredBuffer<VertexPosition>      vertexPositions [MAX_MODEL_DEFINITIONS] : register(t1, space3);
-StructuredBuffer<VertexAttributes>    vertexAttributes[MAX_MODEL_DEFINITIONS] : register(t1, space4);
-Texture2D<float4>                     textures        [MAX_TEXTURES         ] : register(t1, space5);
-StructuredBuffer<MaterialParameters>  materials                               : register(t0, space5);
-
 ConstantBuffer<SceneConstants> sceneConstants : register(b0);
-
-cbuffer VisibilityPassRootConstants : register(b0, space1)
-{
-    uint InstanceIndex;
-};
-
-StructuredBuffer<InstanceAttributes> instanceList : register(t0, space0);
-
-
 
 Texture2D<uint>   visibilityMap : register(t1, space0);
 Texture2D<float>  depthMap      : register(t2, space0);
@@ -28,8 +14,6 @@ RWTexture2D<float4> taaColorUav : register(u0, space0);
 Texture2D<float4> colorSrv            : register(t3, space0);
 Texture2D<float4> previousTaaColorSrv : register(t4, space0);
 Texture2D<float4> previousDepthSrv    : register(t5, space0);
-
-sampler defaultSampler : register(s0, space0);
 
 
 
@@ -56,13 +40,13 @@ float GetViewDepth(uint2 pos)
 float3 GetViewPos(uint2 pos)
 {
     float depth = GetViewDepth(pos);
-    return float3(((pos + 0.5f) * sceneConstants.InverseProjectionScale + sceneConstants.InverseProjectionBias) * depth, depth);
+    return float3(((pos + 0.5f) * sceneConstants.InverseOffsetedProjectionScale + sceneConstants.InverseOffsetedProjectionBias) * depth, depth);
 }
 
 float3 GetCenterViewPos(uint2 pos)
 {
     float depth = GetViewDepth(pos);
-    return float3(((pos + 0.5f) * sceneConstants.InverseCenterProjectionScale + sceneConstants.InverseCenterProjectionBias) * depth, depth);
+    return GetPixelCenterViewPos(sceneConstants.ViewSpace, pos, depth);
 }
 
 float3 GetBarycentric(uint modelIndex, uint3 indices, float4x4 modelToView, float3 viewPos)
@@ -83,59 +67,9 @@ float3 GetBarycentric(uint modelIndex, uint3 indices, float4x4 modelToView, floa
     return bary / dot(bary, 1);
 }
 
-uint NumPixelsX() { return sceneConstants.Size.x                        ; }
-uint NumPixelsY() { return sceneConstants.Size.y                        ; }
-uint NumPixels () { return sceneConstants.Size.x * sceneConstants.Size.y; }
-
-
-
-
-float4 VisibilitySolidVS(float3 position : SV_Position) : SV_Position
-{
-    float4 result = mul(float4(position, 1), instanceList[InstanceIndex].Projection);
-    result.xy += sceneConstants.NormalizedPixelOffset * result.w;
-    return result;
-}
-
-uint VisibilitySolidPS(uint triangleId : SV_PrimitiveID) : SV_Target
-{
-    uint instanceId = InstanceIndex + 1;
-    return triangleId | (instanceId << 20);
-}
-
-
-
-
-struct AlphaTestVertexOutput
-{
-    float4 Position : SV_Position;
-    float2 Uv       : UV;
-};
-
-AlphaTestVertexOutput VisibilityAlphaTestVS(float3 position : SV_Position, float2 uv : UV)
-{
-    AlphaTestVertexOutput result;
-    result.Position = mul(float4(position, 1), instanceList[InstanceIndex].Projection);
-    result.Position.xy += sceneConstants.NormalizedPixelOffset * result.Position.w;
-    result.Uv = uv;
-    return result;
-}
-
-uint VisibilityAlphaTestPS(AlphaTestVertexOutput data, uint triangleId : SV_PrimitiveID) : SV_Target
-{
-    uint instanceId = InstanceIndex + 1;
-
-    // TODO: Individual Draw calls so the texture ID can just be a constant.
-    uint modelIndex       = instanceList  [InstanceIndex]         .ModelIndex;
-    uint materialIndex    = triangleParams[modelIndex][triangleId].MaterialIndex;
-    uint diffuseTextureId = materials     [materialIndex]         .DiffuseTextureId;
-
-    clip(textures[diffuseTextureId - 1].Sample(defaultSampler, data.Uv).a - 0.5f);
-
-    return triangleId | (instanceId << 20);
-}
-
-
+uint NumPixelsX() { return sceneConstants.ViewSpace.Size.x                                  ; }
+uint NumPixelsY() { return sceneConstants.ViewSpace.Size.y                                  ; }
+uint NumPixels () { return sceneConstants.ViewSpace.Size.x * sceneConstants.ViewSpace.Size.y; }
 
 
 
@@ -179,12 +113,12 @@ GBufferSample GetGBufferSample(uint visibility, float3 viewPos)
     result.ViewPos    = viewPos;
     result.ViewNormal = normalize(mul(normalize(normal0 * result.Barycentric[0] + normal1 * result.Barycentric[1] + normal2 * result.Barycentric[2]), (float3x3)modelToView));
 
-    float2 sPos    = (viewPos.xy / viewPos.z) * sceneConstants.ProjectionScale + sceneConstants.ProjectionBias;
+    float2 sPos    = (viewPos.xy / viewPos.z) * sceneConstants.OffsetedProjectionScale + sceneConstants.OffsetedProjectionBias;
     float2 sPos_dx = sPos + float2(1.0f, 0.0f);
     float2 sPos_dy = sPos + float2(0.0f, 1.0f);
 
-    float3 zViewPos_dx = float3((sPos_dx * sceneConstants.InverseProjectionScale + sceneConstants.InverseProjectionBias) * viewPos.z, viewPos.z);
-    float3 zViewPos_dy = float3((sPos_dy * sceneConstants.InverseProjectionScale + sceneConstants.InverseProjectionBias) * viewPos.z, viewPos.z);
+    float3 zViewPos_dx = float3((sPos_dx * sceneConstants.InverseOffsetedProjectionScale + sceneConstants.InverseOffsetedProjectionBias) * viewPos.z, viewPos.z);
+    float3 zViewPos_dy = float3((sPos_dy * sceneConstants.InverseOffsetedProjectionScale + sceneConstants.InverseOffsetedProjectionBias) * viewPos.z, viewPos.z);
 
     float3 viewPos_dx = zViewPos_dx * (dot(viewPos, result.ViewNormal) / dot(zViewPos_dx, result.ViewNormal));
     float3 viewPos_dy = zViewPos_dy * (dot(viewPos, result.ViewNormal) / dot(zViewPos_dy, result.ViewNormal));
@@ -341,7 +275,7 @@ void Postprocess(uint3 pos : SV_DispatchThreadID)
         uint instanceIndex  = (visibility >> 20) - 1;
 
         float3 lastFrameViewPos = mul(float4(GetCenterViewPos(pos.xy), 1), instanceList[instanceIndex].InverseViewAndLastFrameView).xyz;
-        float2 lastFramePos = (lastFrameViewPos.xy / lastFrameViewPos.z) * (-0.5f * sceneConstants.InverseAspectRatio) + 0.5f; //CenterProjectionScale + sceneConstants.CenterProjectionBias;
+        float2 lastFramePos = (lastFrameViewPos.xy / lastFrameViewPos.z) * (-0.5f * sceneConstants.ViewSpace.InverseFlipAndAspectRatio) + 0.5f; //CenterProjectionScale + sceneConstants.CenterProjectionBias;
         if (lastFramePos.x < 0 || lastFramePos.y < 0 || lastFramePos.x >= 1 || lastFramePos.y >= 1) //lastFramePos.x >= sceneConstants.Size.x || lastFramePos.y >= sceneConstants.Size.y)
         {
             // Don't sample from outside the frame.
@@ -378,7 +312,7 @@ void Postprocess(uint3 pos : SV_DispatchThreadID)
         float3 colorYCogMin = min(min(colorYCog, colorYCog0), min(min(colorYCog1, colorYCog2), min(min(colorYCog3, min(colorYCog4, colorYCog5)), min(colorYCog6, colorYCog7))));
         float3 colorYCogMax = max(max(colorYCog, colorYCog0), max(max(colorYCog1, colorYCog2), min(max(colorYCog3, max(colorYCog4, colorYCog5)), max(colorYCog6, colorYCog7))));
 
-        float3 previousColor = SampleTextureCatmullRom(previousTaaColorSrv, defaultSampler, lastFramePos, sceneConstants.Size).xyz;
+        float3 previousColor = SampleTextureCatmullRom(previousTaaColorSrv, defaultSampler, lastFramePos, sceneConstants.ViewSpace.Size).xyz;
         //float3 previousColor = previousTaaColorSrv.SampleLevel(defaultSampler, lastFramePos, 0).xyz;
         float3 previousColorYCog = mul(previousColor, RgbToYCog);
         if (previousColorYCog.x < colorYCogMin.x)

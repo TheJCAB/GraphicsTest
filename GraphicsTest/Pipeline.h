@@ -87,17 +87,6 @@ struct RenderPipelineAssets
 };
 
 
-
-struct VisibilityPass
-{
-    ComPtr<ID3D12RootSignature> RootSignature;
-    ComPtr<ID3D12PipelineState> PipelineState;
-
-    VisibilityPass(RenderDevice& renderDevice);
-
-    void Render(RenderDevice const&, ModelManager const&, InstanceManager const&, RenderPipelineAssets const&) const;
-};
-
 struct MsaaGatherPass
 {
     ComPtr<ID3D12RootSignature> RootSignature;
@@ -105,7 +94,7 @@ struct MsaaGatherPass
 
     MsaaGatherPass(RenderDevice& renderDevice);
 
-    void Render(RenderDevice const&, ModelManager const&, InstanceManager const&, RenderPipelineAssets const&) const;
+    void Render(RenderDevice const&, SceneGraphAssets const&, RenderPipelineAssets const&) const;
 };
 
 struct ComputableGatherPass
@@ -115,7 +104,7 @@ struct ComputableGatherPass
 
     ComputableGatherPass(RenderDevice& renderDevice);
 
-    void Render(RenderDevice const&, ModelManager const&, InstanceManager const&, RenderPipelineAssets const&) const;
+    void Render(RenderDevice const&, SceneGraphAssets const&, RenderPipelineAssets const&) const;
 };
 
 struct ColorPass
@@ -125,7 +114,7 @@ struct ColorPass
 
     ColorPass(RenderDevice& renderDevice);
 
-    void Render(RenderDevice const&, TextureManager const&, MaterialManager const&, ModelManager const&, InstanceManager const&, RenderPipelineAssets const&) const;
+    void Render(RenderDevice const&, SceneGraphAssets const&, RenderPipelineAssets const&) const;
 };
 
 struct PostprocessPass
@@ -162,7 +151,7 @@ struct RenderPipeline : IRenderPipeline
 
     RenderPipeline(RenderDevice&);
 
-    void Render(RenderDevice&, TextureManager const&, MaterialManager const&, ModelManager const&, InstanceManager const&);
+    void Render(RenderDevice&, SceneGraphAssets const&);
 };
 
 #endif // !HLSL

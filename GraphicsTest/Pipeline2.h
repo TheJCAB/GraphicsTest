@@ -22,6 +22,7 @@
 #endif // !HLSL
 
 #include "Model.h"
+#include "ViewSpace.h"
 
 #if !HLSL
 namespace VisDefPipeline
@@ -33,32 +34,22 @@ inline bool g_forgetCurrentFrame = false;
 
 struct SceneConstants
 {
-    XMUINT2  Size;
+    ViewSpaceConstants ViewSpace;
 
     XMFLOAT2 PixelOffset;
     XMFLOAT2 NormalizedPixelOffset;
 
-    // ViewPos.xy / z projected into [0..width, 0..height] screen space
-    XMFLOAT2 ProjectionScale;
-    XMFLOAT2 ProjectionBias ;
+    XMFLOAT2 OffsetedProjectionScale;
+    XMFLOAT2 OffsetedProjectionBias ;
 
-    XMFLOAT2 InverseProjectionScale;
-    XMFLOAT2 InverseProjectionBias ;
-
-    XMFLOAT2 CenterProjectionScale;
-    XMFLOAT2 CenterProjectionBias ;
-
-    XMFLOAT2 InverseCenterProjectionScale;
-    XMFLOAT2 InverseCenterProjectionBias ;
+    XMFLOAT2 InverseOffsetedProjectionScale;
+    XMFLOAT2 InverseOffsetedProjectionBias ;
 
     XMFLOAT2 LastFrameProjectionScale;
     XMFLOAT2 LastFrameProjectionBias ;
 
     XMFLOAT2 LastFrameInverseProjectionScale;
     XMFLOAT2 LastFrameInverseProjectionBias ;
-
-    XMFLOAT2 InverseAspectRatio;
-    XMFLOAT2 AspectRatio       ;
 
     uint32_t ForgetCurrentFrame;
 };
@@ -88,17 +79,6 @@ struct FrameParameters
     uint32_t flipIndex         = 0;
 };
 
-struct VisibilityPass
-{
-    ComPtr<ID3D12RootSignature> RootSignature;
-    ComPtr<ID3D12PipelineState> SolidPipelineState;
-    ComPtr<ID3D12PipelineState> AlphaTestPipelineState;
-
-    VisibilityPass(RenderDevice& renderDevice);
-
-    void Render(RenderDevice const&, FrameParameters const&, TextureManager const&, MaterialManager const&, ModelManager const&, InstanceManager const&, RenderPipelineAssets const&) const;
-};
-
 struct ColorPass
 {
     ComPtr<ID3D12RootSignature> RootSignature;
@@ -106,7 +86,7 @@ struct ColorPass
 
     ColorPass(RenderDevice& renderDevice);
 
-    void Render(RenderDevice const&, FrameParameters const&, TextureManager const&, MaterialManager const&, ModelManager const&, InstanceManager const&, RenderPipelineAssets const&) const;
+    void Render(RenderDevice const&, FrameParameters const&, SceneGraphAssets const&, RenderPipelineAssets const&) const;
 };
 
 struct PostprocessPass
@@ -143,7 +123,7 @@ struct RenderPipeline : IRenderPipeline
 
     RenderPipeline(RenderDevice&);
 
-    void Render(RenderDevice&, TextureManager const&, MaterialManager const&, ModelManager const&, InstanceManager const&);
+    void Render(RenderDevice&, SceneGraphAssets const&);
 };
 
 #endif // !HLSL

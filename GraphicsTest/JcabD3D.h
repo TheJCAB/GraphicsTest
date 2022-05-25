@@ -433,10 +433,10 @@ template < D3D12_ROOT_PARAMETER_TYPE type, D3D12_SHADER_VISIBILITY visibility, U
     };
 };
 
-template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space, D3D12_ROOT_DESCRIPTOR_FLAGS flags = D3D12_ROOT_DESCRIPTOR_FLAG_NONE> using Cbv = Descriptor<D3D12_ROOT_PARAMETER_TYPE_CBV, visibility, reg, space, flags>;
-template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space, D3D12_ROOT_DESCRIPTOR_FLAGS flags = D3D12_ROOT_DESCRIPTOR_FLAG_NONE> using Srv = Descriptor<D3D12_ROOT_PARAMETER_TYPE_SRV, visibility, reg, space, flags>;
+template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space = 0, D3D12_ROOT_DESCRIPTOR_FLAGS flags = D3D12_ROOT_DESCRIPTOR_FLAG_NONE> using Cbv = Descriptor<D3D12_ROOT_PARAMETER_TYPE_CBV, visibility, reg, space, flags>;
+template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space = 0, D3D12_ROOT_DESCRIPTOR_FLAGS flags = D3D12_ROOT_DESCRIPTOR_FLAG_NONE> using Srv = Descriptor<D3D12_ROOT_PARAMETER_TYPE_SRV, visibility, reg, space, flags>;
 
-template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space, UINT count > struct Constants
+template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT count, UINT space = 0 > struct Constants
 {
     static constexpr D3D12_ROOT_PARAMETER1 Parameter
     {
@@ -512,12 +512,12 @@ public:
     operator D3D12_ROOT_SIGNATURE_DESC1 const&() const { return Desc; }
 };
 
-template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space, UINT count, typename... args > struct Signature<Constants<visibility, reg, space, count>, args...>
+template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT count, UINT space, typename... args > struct Signature<Constants<visibility, reg, count, space>, args...>
 {
 private:
     using Next = Signature<args...>;
 public:
-    static constexpr auto Parameters = Next::Parameters.Cons<Constants<visibility, reg, space, count>>;
+    static constexpr auto Parameters = Next::Parameters.Cons<Constants<visibility, reg, count, space>>;
     static constexpr D3D12_ROOT_SIGNATURE_DESC1 Desc{
         .NumParameters     = Parameters.Size             ,
         .pParameters       = Parameters.Data             ,
@@ -615,11 +615,14 @@ struct MultisamplingState
     UINT Count   = 1;
     UINT Quality = 0;
     UINT Mask    = UINT_MAX;
+
+    MultisamplingState() = default;
+    MultisamplingState(uint32_t rate) : Count{ rate } {}
 };
 
 constexpr MultisamplingState NoMultisampling{};
 
-template < uint8_t msaa > constexpr MultisamplingState Multisampling{ .Count = msaa };
+template < uint8_t msaa > constexpr MultisamplingState Multisampling{ msaa };
 
 constexpr D3D12_DEPTH_STENCIL_DESC NoDepthStencil{ .DepthEnable = FALSE, .StencilEnable = FALSE };
 

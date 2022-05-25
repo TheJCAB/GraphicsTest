@@ -1,48 +1,13 @@
 
 #include "Pipeline.h"
 
-StructuredBuffer<TriangleIndices>     indices         [MAX_MODEL_DEFINITIONS] : register(t1, space1);
-StructuredBuffer<TriangleParameters>  triangleParams  [MAX_MODEL_DEFINITIONS] : register(t1, space2);
-StructuredBuffer<VertexPosition>      vertexPositions [MAX_MODEL_DEFINITIONS] : register(t1, space3);
-StructuredBuffer<VertexAttributes>    vertexAttributes[MAX_MODEL_DEFINITIONS] : register(t1, space4);
-Texture2D<float4>                     textures        [MAX_TEXTURES         ] : register(t1, space5);
-StructuredBuffer<MaterialParameters>  materials                               : register(t0, space5);
-
 ConstantBuffer<SceneConstants> sceneConstants : register(b0);
-
-cbuffer VisibilityPassRootConstants : register(b0, space1)
-{
-    uint InstanceIndex;
-};
-
-StructuredBuffer<InstanceAttributes> instanceList : register(t0, space0);
-
-
-
-
-
-float4 VisibilityVS(float3 position : SV_Position) : SV_Position
-{
-    return mul(float4(position, 1), instanceList[InstanceIndex].Projection);
-}
-
-uint VisibilityPS(uint triangleId : SV_PrimitiveID) : SV_Target
-{
-    return triangleId | ((InstanceIndex + 1) << 20);
-}
-
-
-
-
-
 
 Texture2DMS<uint>  visibilityMap : register(t1, space0);
 Texture2DMS<float> depthMap      : register(t2, space0);
 
 
 RWTexture2D<float4> colorUav : register(u0, space0);
-
-sampler defaultSampler : register(s0, space0);
 
 
 
