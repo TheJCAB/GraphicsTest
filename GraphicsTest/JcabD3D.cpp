@@ -218,8 +218,8 @@ RenderDevice RenderDevice::Create(HWND const hwnd, uint32_t const width, uint32_
     renderDevice.scissorRect = D3D12_RECT    { 0, 0, static_cast<LONG >(width), static_cast<LONG >(height) };
 
     // Create descriptor heaps.
-    renderDevice.rtvDescriptorHeap     = renderDevice.rtvDescriptorHeap    .Create(renderDevice.device.Get(),    10);
-    renderDevice.dsvDescriptorHeap     = renderDevice.dsvDescriptorHeap    .Create(renderDevice.device.Get(),    10);
+    renderDevice.rtvDescriptorHeap     = renderDevice.rtvDescriptorHeap    .Create(renderDevice.device.Get(),   100);
+    renderDevice.dsvDescriptorHeap     = renderDevice.dsvDescriptorHeap    .Create(renderDevice.device.Get(),   100);
     renderDevice.srvDescriptorHeap     = renderDevice.srvDescriptorHeap    .Create(renderDevice.device.Get(), 10000, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
     renderDevice.samplerDescriptorHeap = renderDevice.samplerDescriptorHeap.Create(renderDevice.device.Get(),    10, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
 

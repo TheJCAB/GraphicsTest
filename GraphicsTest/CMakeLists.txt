@@ -42,10 +42,12 @@ add_executable (GraphicsTest WIN32
 	ObjModel.cpp        ObjModel.h
 	Pipeline.cpp        Pipeline.h
     Pipeline2.cpp       Pipeline2.h
+    Pipeline3.cpp       Pipeline3.h
 
     HLSL.h
     IRenderPipeline.h
- "ViewSpace.h")
+    ViewSpace.h
+)
 
 add_hlsl_shader(GraphicsTest Model.hlsl "vs_6_0" VisibilitySolidVS     Model_VisibilitySolidVSShader    )
 add_hlsl_shader(GraphicsTest Model.hlsl "ps_6_0" VisibilitySolidPS     Model_VisibilitySolidPSShader    )
@@ -62,6 +64,12 @@ add_hlsl_shader(GraphicsTest Pipeline2.hlsl "cs_6_0" ColorPass             VisDe
 add_hlsl_shader(GraphicsTest Pipeline2.hlsl "cs_6_0" Postprocess           VisDefPipeline_PostprocessShader          )
 add_hlsl_shader(GraphicsTest Pipeline2.hlsl "vs_6_0" ResolveVS             VisDefPipeline_ResolveVSShader            )
 add_hlsl_shader(GraphicsTest Pipeline2.hlsl "ps_6_0" ResolvePS             VisDefPipeline_ResolvePSShader            )
+
+add_hlsl_shader(GraphicsTest Pipeline3.hlsl "cs_6_0" MsaaGatherPass VisDefMsaa3Pipeline_MsaaGatherPassShader)
+add_hlsl_shader(GraphicsTest Pipeline3.hlsl "cs_6_0" ColorPass      VisDefMsaa3Pipeline_ColorPassShader     )
+add_hlsl_shader(GraphicsTest Pipeline3.hlsl "cs_6_0" Postprocess    VisDefMsaa3Pipeline_PostprocessShader   )
+add_hlsl_shader(GraphicsTest Pipeline3.hlsl "vs_6_0" ResolveVS      VisDefMsaa3Pipeline_ResolveVSShader     )
+add_hlsl_shader(GraphicsTest Pipeline3.hlsl "ps_6_0" ResolvePS      VisDefMsaa3Pipeline_ResolvePSShader     )
 
 add_hlsl_shader(GraphicsTest JcabD3D.hlsl "cs_6_0" MipGenerationPass MipGenerationPassShader)
 

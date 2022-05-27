@@ -258,6 +258,12 @@ void Postprocess(uint3 pos : SV_DispatchThreadID)
 
         float3 viewPos = GetViewPos(pos.xy);
         float3 lastFrameViewPos = mul(float4(viewPos, 1), instanceList[instanceIndex].InverseViewAndLastFrameView).xyz;
+        if (length(lastFrameViewPos - viewPos) > length(viewPos) * 0.1f)
+        {
+            // Don't sample things that have moved too far in view space.
+            taaColorUav[pos.xy] = color;
+            return;
+        }
         float2 lastFramePos = (lastFrameViewPos.xy / lastFrameViewPos.z) * (-0.5f * sceneConstants.ViewSpace.InverseFlipAndAspectRatio) + 0.5f + sceneConstants.NormalizedPixelOffset;
         if (lastFramePos.x < 0 || lastFramePos.y < 0 || lastFramePos.x >= 1 || lastFramePos.y >= 1) //lastFramePos.x >= sceneConstants.Size.x || lastFramePos.y >= sceneConstants.Size.y)
         {

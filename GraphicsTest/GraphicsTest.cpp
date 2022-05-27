@@ -6,6 +6,7 @@
 #include "ObjModel.h"
 #include "Pipeline.h"
 #include "Pipeline2.h"
+#include "Pipeline3.h"
 
 #include <shlobj.h>
 #include <hidusage.h>
@@ -132,6 +133,7 @@ Model CreateCubeModel(uint32_t materialIndex, AssetUploader& uploader, RenderDev
 std::shared_ptr<IRenderPipeline> g_pipeline;
 std::shared_ptr<IRenderPipeline> g_pipeline1;
 std::shared_ptr<IRenderPipeline> g_pipeline2;
+std::shared_ptr<IRenderPipeline> g_pipeline3;
 
 struct Assets
 {
@@ -151,8 +153,9 @@ Assets LoadAssets(RenderDevice& renderDevice)
     AssetUploader uploader{ renderDevice };
 
     g_pipeline  =
-    g_pipeline1 = std::make_shared<VisDefMsaaPipeline::RenderPipeline>(renderDevice);
-    g_pipeline2 = std::make_shared<VisDefPipeline    ::RenderPipeline>(renderDevice);
+    g_pipeline1 = std::make_shared<VisDefMsaaPipeline ::RenderPipeline>(renderDevice);
+    g_pipeline2 = std::make_shared<VisDefPipeline     ::RenderPipeline>(renderDevice);
+    g_pipeline3 = std::make_shared<VisDefMsaa3Pipeline::RenderPipeline>(renderDevice);
 
     assets.sceneGraphAssets = std::make_shared<SceneGraphAssets>(renderDevice);
 
@@ -444,6 +447,9 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPara
                 break;
             case '2':
                 g_pipeline = g_pipeline2;
+                break;
+            case '3':
+                g_pipeline = g_pipeline3;
                 break;
             case 'W':
                 g_movementZForward = true;
