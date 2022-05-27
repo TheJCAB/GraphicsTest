@@ -214,8 +214,6 @@ Assets LoadAssets(RenderDevice& renderDevice)
         }
     }
 
-    //FILE* const f = fopen(, "r");
-
     return assets;
 }
 
@@ -437,6 +435,9 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPara
                 break;
             case 'P':
                 VisDefPipeline::g_forgetCurrentFrame = !VisDefPipeline::g_forgetCurrentFrame;
+                break;
+            case 'M':
+                VisDefPipeline::g_markMagenta = !VisDefPipeline::g_markMagenta;
                 break;
             case '1':
                 g_pipeline = g_pipeline1;

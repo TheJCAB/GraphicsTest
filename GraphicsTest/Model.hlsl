@@ -6,7 +6,7 @@
 struct VisibilityPassRootConstants
 {
     uint32_t InstanceIndex;
-    XMFLOAT2 NormalizedPixelOffset;
+    //XMFLOAT2 NormalizedPixelOffset;
 };
 
 ConstantBuffer<VisibilityPassRootConstants> RootConstants : register(b0, space1);
@@ -16,7 +16,7 @@ ConstantBuffer<VisibilityPassRootConstants> RootConstants : register(b0, space1)
 float4 VisibilitySolidVS(float3 position : SV_Position) : SV_Position
 {
     float4 result = mul(float4(position, 1), instanceList[RootConstants.InstanceIndex].Projection);
-    result.xy += RootConstants.NormalizedPixelOffset * result.w;
+    //result.xy += RootConstants.NormalizedPixelOffset * result.w;
     return result;
 }
 
@@ -39,7 +39,7 @@ AlphaTestVertexOutput VisibilityAlphaTestVS(float3 position : SV_Position, float
 {
     AlphaTestVertexOutput result;
     result.Position = mul(float4(position, 1), instanceList[RootConstants.InstanceIndex].Projection);
-    result.Position.xy += RootConstants.NormalizedPixelOffset * result.Position.w;
+    //result.Position.xy += RootConstants.NormalizedPixelOffset * result.Position.w;
     result.Uv = uv;
     return result;
 }

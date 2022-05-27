@@ -356,7 +356,7 @@ struct VisibilityPass
 
     VisibilityPass(RenderDevice&, uint32_t msaa);
 
-    void Render(RenderDevice const&, SceneGraphAssets const&, XMFLOAT2 const& normalizedPixelOffset, IntermediateRenderTarget const&, IntermediateDepthBuffer const&) const;
+    void Render(RenderDevice const&, SceneGraphAssets const&, XMFLOAT2 const& pixelOffset, IntermediateRenderTarget const&, IntermediateDepthBuffer const&) const;
 };
 
 struct RootSignatureIndices

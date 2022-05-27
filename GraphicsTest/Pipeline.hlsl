@@ -45,34 +45,21 @@ float GetDepth(uint2 pos, uint s)
     return depthMap.sample[GetVisibilitySample(s)][GetVisibilityPos(pos, s)];
 }
 
+float3 ScreenPosToViewPos(float2 sPos, float viewPosZ)
+{
+    return float3((sPos * sceneConstants.ViewSpace.InverseProjectionScale + sceneConstants.ViewSpace.InverseProjectionBias) * viewPosZ, viewPosZ);
+}
+
 float3 GetSampleViewPos(uint2 pos, int s)
 {
     float depth = -0.0001f / GetDepth(pos, s);
     float2 spos = GetVisibilityPos(pos, s) + 0.5 + visibilityMap.GetSamplePosition(GetVisibilitySample(s));
-    return float3((spos * sceneConstants.InverseProjectionScale + sceneConstants.InverseProjectionBias) * depth, depth);
+    return ScreenPosToViewPos(spos, depth);
 }
 
-float3 GetBarycentric(uint modelIndex, uint3 indices, float4x4 modelToView, float3 viewPos)
-{
-    float3 viewPos0 = mul(float4(vertexPositions[modelIndex][indices[0]], 1), modelToView).xyz;
-    float3 viewPos1 = mul(float4(vertexPositions[modelIndex][indices[1]], 1), modelToView).xyz;
-    float3 viewPos2 = mul(float4(vertexPositions[modelIndex][indices[2]], 1), modelToView).xyz;
-
-    float3 N = cross(viewPos1 - viewPos0, viewPos2 - viewPos0);
-    float N2 = dot(N, N);
-
-    float3 bary = clamp(float3(
-        dot(cross(viewPos1 - viewPos, viewPos2 - viewPos), N),
-        dot(cross(viewPos2 - viewPos, viewPos0 - viewPos), N),
-        dot(cross(viewPos0 - viewPos, viewPos1 - viewPos), N)
-    ) / N2, 0, 1);
-
-    return bary / dot(bary, 1);
-}
-
-uint NumQuadsX() { return sceneConstants.Size.x                         / PSamplesX; }
-uint NumQuadsY() { return sceneConstants.Size.y                         / PSamplesY; }
-uint NumQuads () { return sceneConstants.Size.x * sceneConstants.Size.y / PSamples ; }
+uint NumQuadsX() { return sceneConstants.ViewSpace.Size.x                                   / PSamplesX; }
+uint NumQuadsY() { return sceneConstants.ViewSpace.Size.y                                   / PSamplesY; }
+uint NumQuads () { return sceneConstants.ViewSpace.Size.x * sceneConstants.ViewSpace.Size.y / PSamples ; }
 
 struct MsaaSample
 {
@@ -178,14 +165,6 @@ void MsaaGatherPass(uint3 pos : SV_DispatchThreadID, uint tindex : SV_GroupIndex
     }
 }
 
-struct ComputableSample
-{
-    uint  ScreenPos;  // 32 bits
-    float Depth;      // As is, 32 bits
-};
-
-RWStructuredBuffer<ComputableSample> computableBuffer : register(u1, space0);
-
 float3 CalculateViewPosForQuad(uint2 quadPos, uint sampleMask)
 {
     float3 viewPos = float3(0, 0, 0);
@@ -207,39 +186,6 @@ float3 CalculateViewPosForQuad(uint2 quadPos, uint sampleMask)
     }
 
     return viewPos / posWeight;
-}
-
-[numthreads(32 / PSamplesX, 16 / PSamplesY, 1)]
-void ComputableGatherPass(uint3 pos : SV_DispatchThreadID, uint tindex : SV_GroupIndex)
-{
-    uint quadIndex = pos.x + pos.y * NumQuadsX();
-
-    uint numSamples = msaaSampleCountBuffer[quadIndex];
-
-    for (uint i = 0; i < numSamples; ++i)
-    {
-        ComputableSample result;
-
-        uint v    = msaaBuffer[i * NumQuads() + quadIndex].Visibility;
-        uint mask = msaaBuffer[i * NumQuads() + quadIndex].SampleMask;
-        if (v == 0)
-        {
-            result.ScreenPos = 0; // TODO: calculate from pos.xy
-            result.Depth     = 1e20;
-        }
-        else
-        {
-            float3 viewPos = CalculateViewPosForQuad(pos.xy, mask);
-
-            // screen coordinates with 4 bits of fractional: uint2 normalizedScreenPos = floor(((viewPos.xy / viewPos.z) * sceneConstants.ProjectionScale + sceneConstants.ProjectionBias) * 16),
-            uint2 normalizedScreenPos = floor(((viewPos.xy / viewPos.z) * sceneConstants.NormalizedProjectionScale + sceneConstants.NormalizedProjectionBias) * 65535.0f); // Normalized screen coordinates (resolution independent)
-
-            result.ScreenPos  = normalizedScreenPos.x | (normalizedScreenPos.y << 16);
-            result.Depth      = viewPos.z;
-        }
-
-        computableBuffer[i * NumQuads() + quadIndex] = result;
-    }
 }
 
 float3 DecodeViewPos(uint pos, float depth)
@@ -266,15 +212,11 @@ uint4 DecodeWeights(uint mask)
 
 struct GBufferSample
 {
-    float3 ViewPos;         // As is, or... say 48-64 bits (plus instance index for constants)
-    float3 Barycentric;     // UNORM, 32 bits compressed, possibly less
-    float3 dBarycentric_dx;
-    float3 dBarycentric_dy;
-    float3 ViewNormal;      // UNORM, 2 * 15 + 2 = 32 bits compressed
-    float3 DiffuseColor;
-    //float4 Weight;          // UNORM  4 * 5      = 20 bits compressed
+    float3            ViewPos;
+    BarycentricCoords Barycentric;
+    float3            ViewNormal;
+    float3            DiffuseColor[4];
 };
-// Say, 172 bits compressed.
 
 GBufferSample GetGBufferSample(uint visibility, float3 viewPos)
 {
@@ -287,7 +229,10 @@ GBufferSample GetGBufferSample(uint visibility, float3 viewPos)
 
     uint3 i = indices[modelIndex].Load(tri);
     uint materialIndex = triangleParams[modelIndex][tri].MaterialIndex;
-    result.DiffuseColor = materials[materialIndex].DiffuseColor;
+    result.DiffuseColor[0] =
+    result.DiffuseColor[1] =
+    result.DiffuseColor[2] =
+    result.DiffuseColor[3] = materials[materialIndex].DiffuseColor;
     uint diffuseTextureId = materials[materialIndex].DiffuseTextureId;
     //float3 AmbientColor;
     //float3 DiffuseColor;
@@ -296,30 +241,14 @@ GBufferSample GetGBufferSample(uint visibility, float3 viewPos)
     //uint   DiffuseTextureId;
 
 
-    result.Barycentric = GetBarycentric(modelIndex, i, modelToView, viewPos);
+    result.Barycentric = GetBarycentric(sceneConstants.ViewSpace, vertexPositions[modelIndex], i, modelToView, viewPos);
 
     float3 normal0 = vertexAttributes[modelIndex][i[0]].Normal;
     float3 normal1 = vertexAttributes[modelIndex][i[1]].Normal;
     float3 normal2 = vertexAttributes[modelIndex][i[2]].Normal;
 
     result.ViewPos    = viewPos;
-    result.ViewNormal = normalize(mul(normalize(normal0 * result.Barycentric[0] + normal1 * result.Barycentric[1] + normal2 * result.Barycentric[2]), (float3x3)modelToView));
-
-    float2 sPos    = (viewPos.xy / viewPos.z) * sceneConstants.ProjectionScale + sceneConstants.ProjectionBias;
-    float2 sPos_dx = sPos + float2(1.0f, 0.0f);
-    float2 sPos_dy = sPos + float2(0.0f, 1.0f);
-
-    float3 zViewPos_dx = float3((sPos_dx * sceneConstants.InverseProjectionScale + sceneConstants.InverseProjectionBias) * viewPos.z, viewPos.z);
-    float3 zViewPos_dy = float3((sPos_dy * sceneConstants.InverseProjectionScale + sceneConstants.InverseProjectionBias) * viewPos.z, viewPos.z);
-
-    float3 viewPos_dx = zViewPos_dx * (dot(viewPos, result.ViewNormal) / dot(zViewPos_dx, result.ViewNormal));
-    float3 viewPos_dy = zViewPos_dy * (dot(viewPos, result.ViewNormal) / dot(zViewPos_dy, result.ViewNormal));
-
-    float3 barycentric_dx = GetBarycentric(modelIndex, i, modelToView, viewPos_dx);
-    float3 barycentric_dy = GetBarycentric(modelIndex, i, modelToView, viewPos_dy);
-
-    result.dBarycentric_dx = barycentric_dx - result.Barycentric;
-    result.dBarycentric_dy = barycentric_dy - result.Barycentric;
+    result.ViewNormal = normalize(mul(normalize(normal0 * result.Barycentric.B[0] + normal1 * result.Barycentric.B[1] + normal2 * result.Barycentric.B[2]), (float3x3)modelToView));
 
     if (diffuseTextureId != 0)
     {
@@ -327,19 +256,22 @@ GBufferSample GetGBufferSample(uint visibility, float3 viewPos)
         float2 uv1 = vertexAttributes[modelIndex][i[1]].UV;
         float2 uv2 = vertexAttributes[modelIndex][i[2]].UV;
         float2 uv =
-            uv0 * result.Barycentric[0] +
-            uv1 * result.Barycentric[1] +
-            uv2 * result.Barycentric[2];
+            uv0 * result.Barycentric.B[0] +
+            uv1 * result.Barycentric.B[1] +
+            uv2 * result.Barycentric.B[2];
         float2 ddx =
-            uv0 * result.dBarycentric_dx[0] +
-            uv1 * result.dBarycentric_dx[1] +
-            uv2 * result.dBarycentric_dx[2];
+            uv0 * result.Barycentric.dB_dx[0] +
+            uv1 * result.Barycentric.dB_dx[1] +
+            uv2 * result.Barycentric.dB_dx[2];
         float2 ddy =
-            uv0 * result.dBarycentric_dy[0] +
-            uv1 * result.dBarycentric_dy[1] +
-            uv2 * result.dBarycentric_dy[2];
+            uv0 * result.Barycentric.dB_dy[0] +
+            uv1 * result.Barycentric.dB_dy[1] +
+            uv2 * result.Barycentric.dB_dy[2];
 
-        result.DiffuseColor *= textures[diffuseTextureId - 1].SampleGrad(defaultSampler, uv, ddx, ddy).rgb;
+        result.DiffuseColor[0] *= textures[diffuseTextureId - 1].SampleGrad(defaultSampler, uv - ddx * 0.5f - ddy * 0.5f, ddx, ddy).rgb;
+        result.DiffuseColor[1] *= textures[diffuseTextureId - 1].SampleGrad(defaultSampler, uv + ddx * 0.5f - ddy * 0.5f, ddx, ddy).rgb;
+        result.DiffuseColor[2] *= textures[diffuseTextureId - 1].SampleGrad(defaultSampler, uv - ddx * 0.5f + ddy * 0.5f, ddx, ddy).rgb;
+        result.DiffuseColor[3] *= textures[diffuseTextureId - 1].SampleGrad(defaultSampler, uv + ddx * 0.5f + ddy * 0.5f, ddx, ddy).rgb;
     }
 
     return result;
@@ -389,17 +321,14 @@ void ColorPass(uint3 pos : SV_DispatchThreadID)
             }
             else
             {
-                // Could calculate this right here...
-                //float3 viewPos = CalculateViewPosForQuad(pos.xy, msample.SampleMask);
-                ComputableSample csample = computableBuffer[i * NumQuads() + computableIndex];
-                float3 viewPos = DecodeViewPos(csample.ScreenPos, csample.Depth);
+                float3 viewPos = CalculateViewPosForQuad(pos.xy, msample.SampleMask);
 
                 GBufferSample gSample = GetGBufferSample(v, viewPos);
 
-                float3 albedo0 = gSample.DiffuseColor;
-                float3 albedo1 = gSample.DiffuseColor;
-                float3 albedo2 = gSample.DiffuseColor;
-                float3 albedo3 = gSample.DiffuseColor;
+                float3 albedo0 = gSample.DiffuseColor[0];
+                float3 albedo1 = gSample.DiffuseColor[1];
+                float3 albedo2 = gSample.DiffuseColor[2];
+                float3 albedo3 = gSample.DiffuseColor[3];
 
                 //albedo0.y *= totalWeights[0] / 8.0f;
                 //albedo1.y *= totalWeights[1] / 8.0f;
@@ -505,7 +434,7 @@ void ColorPass(uint3 pos : SV_DispatchThreadID)
     }
 */
 
-    uint2 spos = pos.xy; //DecodeGroupPos(computableBuffer[computableIndex].SampleList[0].ScreenPos);
+    uint2 spos = pos.xy;
     float4 posColor = 1;//float4(spos.x == pos.x ? 1.0f: 0.5f, 1.0f, spos.y == pos.y ? 1.0f: 0.5f, 1.0f);
     //float4 posColor = float4(spos.x == pos.x ? 1.0f: 0.5f, 1.0f, spos.y == pos.y ? 1.0f: 0.5f, 1.0f);
 
@@ -563,30 +492,30 @@ float4 ResolvePS(float4 position : SV_Position) : SV_Target
 
     float4 pixelColor = colorMap[pos];
 
-    if (msaaSampleCountBuffer[computableIndex] == 1)
-    {
-        uint visibility = msaaBuffer[computableIndex].Visibility;
-        float4 mixedColor = pixelColor;
-        if (msaaSampleCountBuffer[computableIndexX] == 1)
-        {
-            if (visibility == msaaBuffer[computableIndexX].Visibility)
-            {
-                float4 oppositeColorX = colorMap[pos ^ uint2(1, 0)];
-                float4 neighborColorX = colorMap[posNeighborX];
-                mixedColor += (oppositeColorX + neighborColorX - 2.0f * pixelColor) / 3.0f;
-            }
-        }
-        if (msaaSampleCountBuffer[computableIndexY] == 1)
-        {
-            if (visibility == msaaBuffer[computableIndexY].Visibility)
-            {
-                float4 oppositeColorY = colorMap[pos ^ uint2(0, 1)];
-                float4 neighborColorY = colorMap[posNeighborY];
-                mixedColor += (oppositeColorY + neighborColorY - 2.0f * pixelColor) / 3.0f;
-            }
-        }
-        pixelColor = clamp(mixedColor, 0, 1);
-    }
+    //if (msaaSampleCountBuffer[computableIndex] == 1)
+    //{
+    //    uint visibility = msaaBuffer[computableIndex].Visibility;
+    //    float4 mixedColor = pixelColor;
+    //    if (msaaSampleCountBuffer[computableIndexX] == 1)
+    //    {
+    //        if (visibility == msaaBuffer[computableIndexX].Visibility)
+    //        {
+    //            float4 oppositeColorX = colorMap[pos ^ uint2(1, 0)];
+    //            float4 neighborColorX = colorMap[posNeighborX];
+    //            mixedColor += (oppositeColorX + neighborColorX - 2.0f * pixelColor) / 3.0f;
+    //        }
+    //    }
+    //    if (msaaSampleCountBuffer[computableIndexY] == 1)
+    //    {
+    //        if (visibility == msaaBuffer[computableIndexY].Visibility)
+    //        {
+    //            float4 oppositeColorY = colorMap[pos ^ uint2(0, 1)];
+    //            float4 neighborColorY = colorMap[posNeighborY];
+    //            mixedColor += (oppositeColorY + neighborColorY - 2.0f * pixelColor) / 3.0f;
+    //        }
+    //    }
+    //    pixelColor = clamp(mixedColor, 0, 1);
+    //}
 
     return //LinearToGamma(
         pixelColor;

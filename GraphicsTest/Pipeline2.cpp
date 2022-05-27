@@ -236,26 +236,31 @@ void RenderPipeline::Render(RenderDevice& renderDevice, SceneGraphAssets const& 
 
     static size_t offsetCount = 0;
 
-    // ViewPos.xy / z projected into [0..renderDevice.Width, 0..renderDevice.Height] screen space
-    sceneConstants->LastFrameProjectionScale = XMFLOAT2( -height / 2.0f,  height / 2.0f);
-    sceneConstants->LastFrameProjectionBias  = XMFLOAT2(  width  / 2.0f + PixelOffsets[offsetCount].x,  height / 2.0f + PixelOffsets[offsetCount].y);
-
-    sceneConstants->LastFrameInverseProjectionScale = XMFLOAT2( -2.0f / height,  2.0f / height);
-    sceneConstants->LastFrameInverseProjectionBias  = XMFLOAT2( width / height + PixelOffsets[offsetCount].x * 2.0f / height, -1.0f - 2.0f * PixelOffsets[offsetCount].y / height);
+    XMFLOAT2 const lastFrameOffset{ PixelOffsets[offsetCount].x - 0.5f, PixelOffsets[offsetCount].y - 0.5f };
 
     offsetCount = (offsetCount + 1) % std::size(PixelOffsets);
 
-    sceneConstants->PixelOffset           = XMFLOAT2{ PixelOffsets[offsetCount].x - 0.5f, PixelOffsets[offsetCount].y - 0.5f };
-    sceneConstants->NormalizedPixelOffset = XMFLOAT2{ (PixelOffsets[offsetCount].x - 0.5f) / width, (PixelOffsets[offsetCount].y - 0.5f) / height };
+    XMFLOAT2 const offset{ PixelOffsets[offsetCount].x - 0.5f, PixelOffsets[offsetCount].y - 0.5f };
 
     // ViewPos.xy / z projected into [0..renderDevice.Width, 0..renderDevice.Height] screen space
-    sceneConstants->OffsetedProjectionScale = XMFLOAT2( -height / 2.0f,  height / 2.0f);
-    sceneConstants->OffsetedProjectionBias  = XMFLOAT2(  width  / 2.0f + PixelOffsets[offsetCount].x,  height / 2.0f + PixelOffsets[offsetCount].y);
+    sceneConstants->LastFrameProjectionScale = XMFLOAT2{ -height / 2.0f,  height / 2.0f };
+    sceneConstants->LastFrameProjectionBias  = XMFLOAT2{ width / 2.0f + lastFrameOffset.x, height / 2.0f + lastFrameOffset.y };
 
-    sceneConstants->InverseOffsetedProjectionScale = XMFLOAT2( -2.0f / height,  2.0f / height);
-    sceneConstants->InverseOffsetedProjectionBias  = XMFLOAT2( width / height + PixelOffsets[offsetCount].x * 2.0f / height, -1.0f - 2.0f * PixelOffsets[offsetCount].y / height);
+    sceneConstants->LastFrameInverseProjectionScale = XMFLOAT2{ -2.0f / height,  2.0f / height };
+    sceneConstants->LastFrameInverseProjectionBias  = XMFLOAT2{ (width + lastFrameOffset.x * 2.0f) / height, -(height + lastFrameOffset.y * 2.0f) / height };
+
+    sceneConstants->PixelOffset           = offset;
+    sceneConstants->NormalizedPixelOffset = XMFLOAT2{ offset.x / width, offset.y / height };
+
+    // ViewPos.xy / z projected into [0..renderDevice.Width, 0..renderDevice.Height] screen space
+    sceneConstants->OffsetedProjectionScale = XMFLOAT2{ -height / 2.0f,  height / 2.0f };
+    sceneConstants->OffsetedProjectionBias  = XMFLOAT2{ width / 2.0f + offset.x, height / 2.0f + offset.y };
+
+    sceneConstants->InverseOffsetedProjectionScale = XMFLOAT2{ -2.0f / height,  2.0f / height };
+    sceneConstants->InverseOffsetedProjectionBias  = XMFLOAT2{ (width + offset.x * 2.0f) / height, -(height + offset.y * 2.0f) / height };
 
     sceneConstants->ForgetCurrentFrame = g_forgetCurrentFrame ? 1 : 0;
+    sceneConstants->MarkMagenta        = g_markMagenta        ? 1 : 0;
 
     currentFrameParams.previousFlipIndex = currentFrameParams.flipIndex;
     currentFrameParams.flipIndex = (currentFrameParams.flipIndex + 1) % 2;
@@ -266,7 +271,7 @@ void RenderPipeline::Render(RenderDevice& renderDevice, SceneGraphAssets const& 
     TransitionResource(renderDevice.commandList, visibilityBuffer.Resource, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
     TransitionResource(renderDevice.commandList, depthBuffer     .Resource, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_DEPTH_WRITE  );
 
-    visibilityPass.Render(renderDevice, sceneGraphAssets, sceneConstants->NormalizedPixelOffset, visibilityBuffer, depthBuffer);
+    visibilityPass.Render(renderDevice, sceneGraphAssets, offset, visibilityBuffer, depthBuffer);
 
     TransitionResource(renderDevice.commandList, visibilityBuffer.Resource, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
     TransitionResource(renderDevice.commandList, depthBuffer     .Resource, D3D12_RESOURCE_STATE_DEPTH_WRITE  , D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);

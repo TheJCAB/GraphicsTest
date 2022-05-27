@@ -335,7 +335,7 @@ VisibilityPass::VisibilityPass(RenderDevice& renderDevice, uint32_t msaa)
     // Create the rendering root signature.
     RootSignature = renderDevice.Create(
         Root::Signature<
-            Root::Constants<D3D12_SHADER_VISIBILITY_ALL,                    0, 3                       , 1 >, // Instance constant
+            Root::Constants<D3D12_SHADER_VISIBILITY_ALL,                    0, 1                       , 1 >, // Instance constant
             Root::Table    <D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange    <0, 1                       , 0>>, // Instance buffer
             Root::Table    <D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange    <1, MAX_MODEL_DEFINITIONS   , 2>>, // Triangle paramters
             Root::Table    <D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange    <1, MAX_TEXTURES            , 5>>, // Textures
@@ -379,7 +379,7 @@ VisibilityPass::VisibilityPass(RenderDevice& renderDevice, uint32_t msaa)
     );
 }
 
-void VisibilityPass::Render(RenderDevice const& renderDevice, SceneGraphAssets const& sceneGraphAssets, XMFLOAT2 const& normalizedPixelOffset, IntermediateRenderTarget const& visibilityBuffer, IntermediateDepthBuffer const& depthBuffer) const
+void VisibilityPass::Render(RenderDevice const& renderDevice, SceneGraphAssets const& sceneGraphAssets, XMFLOAT2 const& pixelOffset, IntermediateRenderTarget const& visibilityBuffer, IntermediateDepthBuffer const& depthBuffer) const
 {
     renderDevice.commandList->SetGraphicsRootSignature(RootSignature.Get());
     renderDevice.commandList->SetPipelineState        (SolidPipelineState.Get());
@@ -391,15 +391,28 @@ void VisibilityPass::Render(RenderDevice const& renderDevice, SceneGraphAssets c
     auto const dsvHandle = renderDevice.dsvDescriptorHeap.GetCpuDescriptorHandle(depthBuffer     .DsvDescriptorIndex);
     renderDevice.commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
 
-    D3D12_VIEWPORT const viewport   { 0, 0, static_cast<float>(visibilityBuffer.Width), static_cast<float>(visibilityBuffer.Height), D3D12_MIN_DEPTH, D3D12_MAX_DEPTH };
-    D3D12_RECT     const scissorRect{ 0, 0, static_cast<LONG >(depthBuffer     .Width), static_cast<LONG >(depthBuffer     .Height) };
+    D3D12_VIEWPORT const viewport
+    {
+        .TopLeftX = 0.5f + pixelOffset.x,
+        .TopLeftY = 0.5f + pixelOffset.y,
+        .Width    = 0.5f + pixelOffset.x + static_cast<float>(visibilityBuffer.Width),
+        .Height   = 0.5f + pixelOffset.y + static_cast<float>(visibilityBuffer.Height),
+        .MinDepth = D3D12_MIN_DEPTH,
+        .MaxDepth = D3D12_MAX_DEPTH,
+    };
+    D3D12_RECT const scissorRect
+    {
+        .left   = 0,
+        .top    = 0,
+        .right  = static_cast<LONG >(depthBuffer.Width ),
+        .bottom = static_cast<LONG >(depthBuffer.Height),
+    };
 
     renderDevice.commandList->RSSetViewports    (1, &viewport);
     renderDevice.commandList->RSSetScissorRects (1, &scissorRect);
 
     renderDevice.commandList->ClearRenderTargetView(rtvHandle, visibilityBuffer.ClearColor.data(), 0, nullptr);
     renderDevice.commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, depthBuffer.ClearValue, 0, 0, nullptr);
-    renderDevice.commandList->SetGraphicsRoot32BitConstants    (0, 2, &normalizedPixelOffset, 1);
     renderDevice.commandList->SetGraphicsRootDescriptorTable   (1, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(sceneGraphAssets.InstanceManager.GetCurrentFrameInstanceAttributes(renderDevice).SrvIndex));
     renderDevice.commandList->SetGraphicsRootDescriptorTable   (2, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(sceneGraphAssets.ModelManager   .GetTriangleParametersDescriptorTable()));
     renderDevice.commandList->SetGraphicsRootDescriptorTable   (3, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(sceneGraphAssets.TextureManager .GetTexturesDescriptorTable          ()));

@@ -49,24 +49,6 @@ float3 GetCenterViewPos(uint2 pos)
     return GetPixelCenterViewPos(sceneConstants.ViewSpace, pos, depth);
 }
 
-float3 GetBarycentric(uint modelIndex, uint3 indices, float4x4 modelToView, float3 viewPos)
-{
-    float3 viewPos0 = mul(float4(vertexPositions[modelIndex][indices[0]], 1), modelToView).xyz;
-    float3 viewPos1 = mul(float4(vertexPositions[modelIndex][indices[1]], 1), modelToView).xyz;
-    float3 viewPos2 = mul(float4(vertexPositions[modelIndex][indices[2]], 1), modelToView).xyz;
-
-    float3 N = cross(viewPos1 - viewPos0, viewPos2 - viewPos0);
-    float N2 = dot(N, N);
-
-    float3 bary = clamp(float3(
-        dot(cross(viewPos1 - viewPos, viewPos2 - viewPos), N),
-        dot(cross(viewPos2 - viewPos, viewPos0 - viewPos), N),
-        dot(cross(viewPos0 - viewPos, viewPos1 - viewPos), N)
-    ) / N2, 0, 1);
-
-    return bary / dot(bary, 1);
-}
-
 uint NumPixelsX() { return sceneConstants.ViewSpace.Size.x                                  ; }
 uint NumPixelsY() { return sceneConstants.ViewSpace.Size.y                                  ; }
 uint NumPixels () { return sceneConstants.ViewSpace.Size.x * sceneConstants.ViewSpace.Size.y; }
@@ -75,14 +57,11 @@ uint NumPixels () { return sceneConstants.ViewSpace.Size.x * sceneConstants.View
 
 struct GBufferSample
 {
-    float3 ViewPos;         // As is, or... say 48-64 bits (plus instance index for constants)
-    float3 Barycentric;     // UNORM, 32 bits compressed, possibly less
-    float3 dBarycentric_dx;
-    float3 dBarycentric_dy;
-    float3 ViewNormal;      // UNORM, 2 * 15 + 2 = 32 bits compressed
-    float3 DiffuseColor;
+    float3            ViewPos;
+    BarycentricCoords Barycentric;
+    float3            ViewNormal;
+    float3            DiffuseColor;
 };
-// Say, 172 bits compressed.
 
 GBufferSample GetGBufferSample(uint visibility, float3 viewPos)
 {
@@ -104,48 +83,23 @@ GBufferSample GetGBufferSample(uint visibility, float3 viewPos)
     //uint   DiffuseTextureId;
 
 
-    result.Barycentric = GetBarycentric(modelIndex, i, modelToView, viewPos);
+    result.Barycentric = GetBarycentric(sceneConstants.ViewSpace, vertexPositions[modelIndex], i, modelToView, viewPos);
 
     float3 normal0 = vertexAttributes[modelIndex][i[0]].Normal;
     float3 normal1 = vertexAttributes[modelIndex][i[1]].Normal;
     float3 normal2 = vertexAttributes[modelIndex][i[2]].Normal;
 
     result.ViewPos    = viewPos;
-    result.ViewNormal = normalize(mul(normalize(normal0 * result.Barycentric[0] + normal1 * result.Barycentric[1] + normal2 * result.Barycentric[2]), (float3x3)modelToView));
-
-    float2 sPos    = (viewPos.xy / viewPos.z) * sceneConstants.OffsetedProjectionScale + sceneConstants.OffsetedProjectionBias;
-    float2 sPos_dx = sPos + float2(1.0f, 0.0f);
-    float2 sPos_dy = sPos + float2(0.0f, 1.0f);
-
-    float3 zViewPos_dx = float3((sPos_dx * sceneConstants.InverseOffsetedProjectionScale + sceneConstants.InverseOffsetedProjectionBias) * viewPos.z, viewPos.z);
-    float3 zViewPos_dy = float3((sPos_dy * sceneConstants.InverseOffsetedProjectionScale + sceneConstants.InverseOffsetedProjectionBias) * viewPos.z, viewPos.z);
-
-    float3 viewPos_dx = zViewPos_dx * (dot(viewPos, result.ViewNormal) / dot(zViewPos_dx, result.ViewNormal));
-    float3 viewPos_dy = zViewPos_dy * (dot(viewPos, result.ViewNormal) / dot(zViewPos_dy, result.ViewNormal));
-
-    float3 barycentric_dx = GetBarycentric(modelIndex, i, modelToView, viewPos_dx);
-    float3 barycentric_dy = GetBarycentric(modelIndex, i, modelToView, viewPos_dy);
-
-    result.dBarycentric_dx = barycentric_dx - result.Barycentric;
-    result.dBarycentric_dy = barycentric_dy - result.Barycentric;
+    result.ViewNormal = normalize(mul(Interpolate(normal0, normal1, normal2, result.Barycentric.B), (float3x3)modelToView));
 
     if (diffuseTextureId != 0)
     {
         float2 uv0 = vertexAttributes[modelIndex][i[0]].UV;
         float2 uv1 = vertexAttributes[modelIndex][i[1]].UV;
         float2 uv2 = vertexAttributes[modelIndex][i[2]].UV;
-        float2 uv =
-            uv0 * result.Barycentric[0] +
-            uv1 * result.Barycentric[1] +
-            uv2 * result.Barycentric[2];
-        float2 ddx =
-            uv0 * result.dBarycentric_dx[0] +
-            uv1 * result.dBarycentric_dx[1] +
-            uv2 * result.dBarycentric_dx[2];
-        float2 ddy =
-            uv0 * result.dBarycentric_dy[0] +
-            uv1 * result.dBarycentric_dy[1] +
-            uv2 * result.dBarycentric_dy[2];
+        float2 uv  = Interpolate(uv0, uv1, uv2, result.Barycentric.B);
+        float2 ddx = Interpolate(uv0, uv1, uv2, result.Barycentric.dB_dx);
+        float2 ddy = Interpolate(uv0, uv1, uv2, result.Barycentric.dB_dy);
 
         result.DiffuseColor *= textures[diffuseTextureId - 1].SampleGrad(defaultSampler, uv, ddx, ddy).rgb;
     }
@@ -262,8 +216,36 @@ float4 SampleTextureCatmullRom(in Texture2D<float4> tex, in SamplerState linearS
 [numthreads(8, 8, 1)]
 void Postprocess(uint3 pos : SV_DispatchThreadID)
 {
-    uint visibility = GetVisibility(pos.xy);
     float4 color = colorSrv[pos.xy];
+
+#if 0
+    taaColorUav[pos.xy] = color;
+
+    if (sceneConstants.ForgetCurrentFrame != 0)
+    {
+        uint visibility = GetVisibility(pos.xy);
+        if (visibility >> 20 == 0)
+        {
+            // Nothing.
+            taaColorUav[pos.xy] = color;
+            return;
+        }
+        uint instanceIndex  = (visibility >> 20) - 1;
+        float3 viewPos = GetViewPos(pos.xy);
+        float3 lastFrameViewPos = mul(float4(viewPos, 1), instanceList[instanceIndex].InverseViewAndLastFrameView).xyz;
+        float2 lastFramePos = (lastFrameViewPos.xy / lastFrameViewPos.z) * (-0.5f * sceneConstants.ViewSpace.InverseFlipAndAspectRatio) + 0.5f - sceneConstants.NormalizedPixelOffset;
+        if (lastFramePos.x < 0 || lastFramePos.y < 0 || lastFramePos.x >= 1 || lastFramePos.y >= 1) //lastFramePos.x >= sceneConstants.Size.x || lastFramePos.y >= sceneConstants.Size.y)
+        {
+            // Don't sample from outside the frame.
+            taaColorUav[pos.xy] = color;
+            return;
+        }
+
+        taaColorUav[pos.xy] = SampleTextureCatmullRom(previousTaaColorSrv, defaultSampler, lastFramePos, sceneConstants.ViewSpace.Size);
+    }
+#endif
+
+    uint visibility = GetVisibility(pos.xy);
     if (visibility >> 20 == 0)
     {
         // Nothing.
@@ -274,74 +256,105 @@ void Postprocess(uint3 pos : SV_DispatchThreadID)
     {
         uint instanceIndex  = (visibility >> 20) - 1;
 
-        float3 lastFrameViewPos = mul(float4(GetCenterViewPos(pos.xy), 1), instanceList[instanceIndex].InverseViewAndLastFrameView).xyz;
-        float2 lastFramePos = (lastFrameViewPos.xy / lastFrameViewPos.z) * (-0.5f * sceneConstants.ViewSpace.InverseFlipAndAspectRatio) + 0.5f; //CenterProjectionScale + sceneConstants.CenterProjectionBias;
+        float3 viewPos = GetViewPos(pos.xy);
+        float3 lastFrameViewPos = mul(float4(viewPos, 1), instanceList[instanceIndex].InverseViewAndLastFrameView).xyz;
+        float2 lastFramePos = (lastFrameViewPos.xy / lastFrameViewPos.z) * (-0.5f * sceneConstants.ViewSpace.InverseFlipAndAspectRatio) + 0.5f + sceneConstants.NormalizedPixelOffset;
         if (lastFramePos.x < 0 || lastFramePos.y < 0 || lastFramePos.x >= 1 || lastFramePos.y >= 1) //lastFramePos.x >= sceneConstants.Size.x || lastFramePos.y >= sceneConstants.Size.y)
         {
             // Don't sample from outside the frame.
             taaColorUav[pos.xy] = color;
             return;
         }
-        //lastFramePos = floor((lastFrameViewPos.xy / lastFrameViewPos.z) * sceneConstants.ProjectionScale + sceneConstants.ProjectionBias);
-        //lastFramePos = floor((lastFrameViewPos.xy / lastFrameViewPos.z) * sceneConstants.LastFrameProjectionScale + sceneConstants.LastFrameProjectionBias);
 
-        //float depth    = depthMap[pos.xy              ].x;
-        //float depth0   = depthMap[pos.xy + uint2(1, 0)].x;
-        //float depth1   = depthMap[pos.xy - uint2(1, 0)].x;
-        //float depth2   = depthMap[pos.xy + uint2(0, 1)].x;
-        //float depth3   = depthMap[pos.xy - uint2(0, 1)].x;
-        //float depthMin = min(min(depth, depth0), min(min(depth1, depth2), depth3));
-        //float depthMax = max(max(depth, depth0), max(max(depth1, depth2), depth3));
-        //float previousDepth = previousDepthSrv.SampleLevel(defaultSampler, lastFramePos, 0).x;
-        //if (previousDepth < depthMin || previousDepth > depthMax)
-        //{
-        //    // Reject if the depth doesn't correspond.
-        //    taaColorUav[pos.xy] = color;
-        //    return;
-        //}
+        float normalizedDistanceInPixels = length(lastFramePos * sceneConstants.ViewSpace.Size - pos.xy) / 2.0f;
+        if (normalizedDistanceInPixels > 1.0f)
+        {
+            // Don't sample too far.
+            taaColorUav[pos.xy] = color;
+            return;
+        }
 
-        float3 colorYCog  = mul(color.xyz           , RgbToYCog);
-        float3 colorYCog0 = mul(colorSrv[pos.xy + uint2(1, 0)].xyz, RgbToYCog);
-        float3 colorYCog1 = mul(colorSrv[pos.xy - uint2(1, 0)].xyz, RgbToYCog);
-        float3 colorYCog2 = mul(colorSrv[pos.xy + uint2(0, 1)].xyz, RgbToYCog);
-        float3 colorYCog3 = mul(colorSrv[pos.xy - uint2(0, 1)].xyz, RgbToYCog);
-        float3 colorYCog4 = mul(colorSrv[pos.xy + uint2(1, 1)].xyz, RgbToYCog);
-        float3 colorYCog5 = mul(colorSrv[pos.xy - uint2(1, 1)].xyz, RgbToYCog);
-        float3 colorYCog6 = mul(colorSrv[pos.xy + uint2(-1, 1)].xyz, RgbToYCog);
-        float3 colorYCog7 = mul(colorSrv[pos.xy - uint2(-1, 1)].xyz, RgbToYCog);
-        float3 colorYCogMin = min(min(colorYCog, colorYCog0), min(min(colorYCog1, colorYCog2), min(min(colorYCog3, min(colorYCog4, colorYCog5)), min(colorYCog6, colorYCog7))));
-        float3 colorYCogMax = max(max(colorYCog, colorYCog0), max(max(colorYCog1, colorYCog2), min(max(colorYCog3, max(colorYCog4, colorYCog5)), max(colorYCog6, colorYCog7))));
+        float taaBlendFactor = TaaBlendFactor * (1.0f - (normalizedDistanceInPixels * normalizedDistanceInPixels) * (normalizedDistanceInPixels * normalizedDistanceInPixels));
 
         float3 previousColor = SampleTextureCatmullRom(previousTaaColorSrv, defaultSampler, lastFramePos, sceneConstants.ViewSpace.Size).xyz;
         //float3 previousColor = previousTaaColorSrv.SampleLevel(defaultSampler, lastFramePos, 0).xyz;
+
+#if 0
+        uint2 pos0 = pos.xy + uint2( 1, 0);
+        uint2 pos1 = pos.xy - uint2( 1, 0);
+        uint2 pos2 = pos.xy + uint2( 0, 1);
+        uint2 pos3 = pos.xy - uint2( 0, 1);
+        uint2 pos4 = pos.xy + uint2( 1, 1);
+        uint2 pos5 = pos.xy - uint2( 1, 1);
+        uint2 pos6 = pos.xy + uint2(-1, 1);
+        uint2 pos7 = pos.xy - uint2(-1, 1);
+
+        float lastFrameViewPosZ0 = mul(float4(GetViewPos(pos0), 1), instanceList[instanceIndex].InverseViewAndLastFrameView).z;
+        float lastFrameViewPosZ1 = mul(float4(GetViewPos(pos1), 1), instanceList[instanceIndex].InverseViewAndLastFrameView).z;
+        float lastFrameViewPosZ2 = mul(float4(GetViewPos(pos2), 1), instanceList[instanceIndex].InverseViewAndLastFrameView).z;
+        float lastFrameViewPosZ3 = mul(float4(GetViewPos(pos3), 1), instanceList[instanceIndex].InverseViewAndLastFrameView).z;
+        float lastFrameViewPosZ4 = mul(float4(GetViewPos(pos4), 1), instanceList[instanceIndex].InverseViewAndLastFrameView).z;
+        float lastFrameViewPosZ5 = mul(float4(GetViewPos(pos5), 1), instanceList[instanceIndex].InverseViewAndLastFrameView).z;
+        float lastFrameViewPosZ6 = mul(float4(GetViewPos(pos6), 1), instanceList[instanceIndex].InverseViewAndLastFrameView).z;
+        float lastFrameViewPosZ7 = mul(float4(GetViewPos(pos7), 1), instanceList[instanceIndex].InverseViewAndLastFrameView).z;
+        float lastFrameViewPosZMin = min(min(lastFrameViewPos.z, lastFrameViewPosZ0), min(min(lastFrameViewPosZ1, lastFrameViewPosZ2), min(min(lastFrameViewPosZ3, min(lastFrameViewPosZ4, lastFrameViewPosZ5)), min(lastFrameViewPosZ6, lastFrameViewPosZ7))));
+        float lastFrameViewPosZMax = max(max(lastFrameViewPos.z, lastFrameViewPosZ0), max(max(lastFrameViewPosZ1, lastFrameViewPosZ2), min(max(lastFrameViewPosZ3, max(lastFrameViewPosZ4, lastFrameViewPosZ5)), max(lastFrameViewPosZ6, lastFrameViewPosZ7))));
+
+        float halfDepthRange = (lastFrameViewPosZMax - lastFrameViewPosZMin) / 2.0f;
+        float previousDepth = DepthToViewDepth(previousDepthSrv.SampleLevel(defaultSampler, lastFramePos, 0).x);
+        if (previousDepth + halfDepthRange < lastFrameViewPosZMin || previousDepth - halfDepthRange > lastFrameViewPosZMax)
+        {
+            // Reject if the depth doesn't correspond.
+            taaColorUav[pos.xy] = color;
+            return;
+        }
+
+        float3 colorYCog  = mul(color.xyz         , RgbToYCog);
+        float3 colorYCog0 = mul(colorSrv[pos0].xyz, RgbToYCog);
+        float3 colorYCog1 = mul(colorSrv[pos1].xyz, RgbToYCog);
+        float3 colorYCog2 = mul(colorSrv[pos2].xyz, RgbToYCog);
+        float3 colorYCog3 = mul(colorSrv[pos3].xyz, RgbToYCog);
+        float3 colorYCog4 = mul(colorSrv[pos4].xyz, RgbToYCog);
+        float3 colorYCog5 = mul(colorSrv[pos5].xyz, RgbToYCog);
+        float3 colorYCog6 = mul(colorSrv[pos6].xyz, RgbToYCog);
+        float3 colorYCog7 = mul(colorSrv[pos7].xyz, RgbToYCog);
+        float3 colorYCogMin = min(min(colorYCog, colorYCog0), min(min(colorYCog1, colorYCog2), min(min(colorYCog3, min(colorYCog4, colorYCog5)), min(colorYCog6, colorYCog7))));
+        float3 colorYCogMax = max(max(colorYCog, colorYCog0), max(max(colorYCog1, colorYCog2), min(max(colorYCog3, max(colorYCog4, colorYCog5)), max(colorYCog6, colorYCog7))));
+
         float3 previousColorYCog = mul(previousColor, RgbToYCog);
-        if (previousColorYCog.x < colorYCogMin.x)
-        {
-            previousColorYCog = colorYCog + (previousColorYCog - colorYCog) * (colorYCogMin.x - colorYCog.x) / (previousColorYCog.x - colorYCog.x);
-        }
-        if (previousColorYCog.y < colorYCogMin.y)
-        {
-            previousColorYCog = colorYCog + (previousColorYCog - colorYCog) * (colorYCogMin.y - colorYCog.y) / (previousColorYCog.y - colorYCog.y);
-        }
-        if (previousColorYCog.z < colorYCogMin.z)
-        {
-            previousColorYCog = colorYCog + (previousColorYCog - colorYCog) * (colorYCogMin.z - colorYCog.z) / (previousColorYCog.z - colorYCog.z);
-        }
-
-        if (previousColorYCog.x > colorYCogMax.x)
-        {
-            previousColorYCog = colorYCog + (previousColorYCog - colorYCog) * (colorYCogMax.x - colorYCog.x) / (previousColorYCog.x - colorYCog.x);
-        }
-        if (previousColorYCog.y > colorYCogMax.y)
-        {
-            previousColorYCog = colorYCog + (previousColorYCog - colorYCog) * (colorYCogMax.y - colorYCog.y) / (previousColorYCog.y - colorYCog.y);
-        }
-        if (previousColorYCog.z > colorYCogMax.z)
-        {
-            previousColorYCog = colorYCog + (previousColorYCog - colorYCog) * (colorYCogMax.z - colorYCog.z) / (previousColorYCog.z - colorYCog.z);
-        }
+        float3 savedPreviousColorYCog = previousColorYCog;
+        //previousColorYCog.yz = clamp(previousColorYCog.yz, colorYCogMin.yz, colorYCogMax.yz);
+        //previousColorYCog = clamp(previousColorYCog, colorYCogMin, colorYCogMax);
+        //if (previousColorYCog.x < colorYCogMin.x)
+        //{
+        //    previousColorYCog = colorYCog + (previousColorYCog - colorYCog) * (colorYCogMin.x - colorYCog.x) / (previousColorYCog.x - colorYCog.x);
+        //}
+        //if (previousColorYCog.y < colorYCogMin.y)
+        //{
+        //    previousColorYCog = colorYCog + (previousColorYCog - colorYCog) * (colorYCogMin.y - colorYCog.y) / (previousColorYCog.y - colorYCog.y);
+        //}
+        //if (previousColorYCog.z < colorYCogMin.z)
+        //{
+        //    previousColorYCog = colorYCog + (previousColorYCog - colorYCog) * (colorYCogMin.z - colorYCog.z) / (previousColorYCog.z - colorYCog.z);
+        //}
+        //
+        //if (previousColorYCog.x > colorYCogMax.x)
+        //{
+        //    previousColorYCog = colorYCog + (previousColorYCog - colorYCog) * (colorYCogMax.x - colorYCog.x) / (previousColorYCog.x - colorYCog.x);
+        //}
+        //if (previousColorYCog.y > colorYCogMax.y)
+        //{
+        //    previousColorYCog = colorYCog + (previousColorYCog - colorYCog) * (colorYCogMax.y - colorYCog.y) / (previousColorYCog.y - colorYCog.y);
+        //}
+        //if (previousColorYCog.z > colorYCogMax.z)
+        //{
+        //    previousColorYCog = colorYCog + (previousColorYCog - colorYCog) * (colorYCogMax.z - colorYCog.z) / (previousColorYCog.z - colorYCog.z);
+        //}
+        float alpha = length(previousColorYCog - savedPreviousColorYCog);
         previousColor = mul(previousColorYCog, YCogToRgb);
-
+#else
+        float alpha = 0;
+#endif
         //if (previousColorYCog.x < colorYCogMin.x || previousColorYCog.x > colorYCogMax.x ||
         //    previousColorYCog.y < colorYCogMin.y || previousColorYCog.y > colorYCogMax.y ||
         //    previousColorYCog.z < colorYCogMin.z || previousColorYCog.z > colorYCogMax.z)
@@ -353,11 +366,11 @@ void Postprocess(uint3 pos : SV_DispatchThreadID)
 
         if (sceneConstants.ForgetCurrentFrame != 0)
         {
-            taaColorUav[pos.xy] = float4(previousColor, 1);
+            taaColorUav[pos.xy] = float4(previousColor, alpha);
         }
         else
         {
-            taaColorUav[pos.xy] = float4(previousColor * TaaBlendFactor + color.xyz * (1.0f - TaaBlendFactor), 1);
+            taaColorUav[pos.xy] = float4(previousColor * taaBlendFactor + color.xyz * (1.0f - taaBlendFactor), alpha);
         }
     }
 }
@@ -385,5 +398,13 @@ float4 ResolvePS(float4 position : SV_Position) : SV_Target
 
     float4 pixelColor = colorMap[pos];
 
-    return pixelColor;
+    if (sceneConstants.MarkMagenta != 0)
+    {
+        return pixelColor.a < 0.01f ? pixelColor : float4(1, 0, 1, 1);
+        //return float4(float3(1, 0, 1) * pixelColor.a + colorMap[pos].rgb * (1.0f - pixelColor.a), 1);
+    }
+    else
+    {
+        return float4(pixelColor.rgb, 1);
+    }
 }

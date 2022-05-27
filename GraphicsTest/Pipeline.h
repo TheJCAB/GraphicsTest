@@ -22,6 +22,7 @@
 #endif // !HLSL
 
 #include "Model.h"
+#include "ViewSpace.h"
 
 #if !HLSL
 namespace VisDefMsaaPipeline
@@ -30,14 +31,7 @@ namespace VisDefMsaaPipeline
 
 struct SceneConstants
 {
-    XMUINT2  Size;
-
-    // ViewPos.xy / z projected into [0..width, 0..height] screen space
-    XMFLOAT2 ProjectionScale;
-    XMFLOAT2 ProjectionBias ;
-
-    XMFLOAT2 InverseProjectionScale;
-    XMFLOAT2 InverseProjectionBias ;
+    ViewSpaceConstants ViewSpace;
 
     // ViewPos.xy / z projected into [0..1, 0..1] normalized space
     XMFLOAT2 NormalizedProjectionScale;
@@ -45,9 +39,6 @@ struct SceneConstants
 
     XMFLOAT2 InverseNormalizedProjectionScale;
     XMFLOAT2 InverseNormalizedProjectionBias ;
-
-    XMFLOAT2 InverseAspectRatio;
-    XMFLOAT2 AspectRatio       ;
 };
 
 
@@ -70,14 +61,6 @@ struct RenderPipelineAssets
     ComPtr<ID3D12Resource> MsaaSampleCountBuffer;
     UINT                   MsaaSampleCountBufferUav;
 
-    struct ComputableSample
-    {
-        uint32_t ScreenPos;  // 32 bits
-        float    Depth;      // As is, 32 bits
-    };
-    ComPtr<ID3D12Resource> ComputableSampleBuffer;
-    UINT                   ComputableSampleBufferUav;
-
     IntermediateRenderTarget ColorBuffer;
     UINT                     ColorBufferUav = 0;
 
@@ -93,16 +76,6 @@ struct MsaaGatherPass
     ComPtr<ID3D12PipelineState> PipelineState;
 
     MsaaGatherPass(RenderDevice& renderDevice);
-
-    void Render(RenderDevice const&, SceneGraphAssets const&, RenderPipelineAssets const&) const;
-};
-
-struct ComputableGatherPass
-{
-    ComPtr<ID3D12RootSignature> RootSignature;
-    ComPtr<ID3D12PipelineState> PipelineState;
-
-    ComputableGatherPass(RenderDevice& renderDevice);
 
     void Render(RenderDevice const&, SceneGraphAssets const&, RenderPipelineAssets const&) const;
 };
@@ -144,7 +117,6 @@ struct RenderPipeline : IRenderPipeline
 
     VisibilityPass       visibilityPass;
     MsaaGatherPass       msaaGatherPass;
-    ComputableGatherPass computableGatherPass;
     ColorPass            colorPass;
     PostprocessPass      postprocessPass;
     ResolvePass          resolvePass;

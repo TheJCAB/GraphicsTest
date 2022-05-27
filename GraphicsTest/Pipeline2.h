@@ -29,6 +29,7 @@ namespace VisDefPipeline
 {
 
 inline bool g_forgetCurrentFrame = false;
+inline bool g_markMagenta        = false;
 
 #endif // !HLSL
 
@@ -52,6 +53,7 @@ struct SceneConstants
     XMFLOAT2 LastFrameInverseProjectionBias ;
 
     uint32_t ForgetCurrentFrame;
+    uint32_t MarkMagenta;
 };
 
 

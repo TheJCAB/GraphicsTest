@@ -53,7 +53,6 @@ add_hlsl_shader(GraphicsTest Model.hlsl "vs_6_0" VisibilityAlphaTestVS Model_Vis
 add_hlsl_shader(GraphicsTest Model.hlsl "ps_6_0" VisibilityAlphaTestPS Model_VisibilityAlphaTestPSShader)
 
 add_hlsl_shader(GraphicsTest Pipeline.hlsl "cs_6_0" MsaaGatherPass       VisDefMsaaPipeline_MsaaGatherPassShader      )
-add_hlsl_shader(GraphicsTest Pipeline.hlsl "cs_6_0" ComputableGatherPass VisDefMsaaPipeline_ComputableGatherPassShader)
 add_hlsl_shader(GraphicsTest Pipeline.hlsl "cs_6_0" ColorPass            VisDefMsaaPipeline_ColorPassShader           )
 add_hlsl_shader(GraphicsTest Pipeline.hlsl "cs_6_0" Postprocess          VisDefMsaaPipeline_PostprocessShader         )
 add_hlsl_shader(GraphicsTest Pipeline.hlsl "vs_6_0" ResolveVS            VisDefMsaaPipeline_ResolveVSShader           )

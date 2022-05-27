@@ -4,7 +4,6 @@
 #include "Pipeline.h"
 
 #include "VisDefMsaaPipeline_MsaaGatherPassShader.h"
-#include "VisDefMsaaPipeline_ComputableGatherPassShader.h"
 #include "VisDefMsaaPipeline_ColorPassShader.h"
 #include "VisDefMsaaPipeline_PostprocessShader.h"
 #include "VisDefMsaaPipeline_ResolveVSShader.h"
@@ -39,18 +38,6 @@ RenderPipelineAssets::RenderPipelineAssets(RenderDevice& renderDevice)
             .Buffer{
                 .NumElements = renderDevice.Width * renderDevice.Height / 4,
                 .StructureByteStride = sizeof(uint32_t),
-            },
-        }
-    );
-
-    ComputableSampleBuffer = CreateGpuBuffer(renderDevice.device, (renderDevice.Width * renderDevice.Height / 4) * MaxSamplesPerQuad * sizeof(ComputableSample));
-    ComputableSampleBufferUav = renderDevice.AllocateUavDescriptor(ComputableSampleBuffer,
-        {
-            .Format        = DXGI_FORMAT_UNKNOWN,
-            .ViewDimension = D3D12_UAV_DIMENSION_BUFFER,
-            .Buffer{
-                .NumElements = (renderDevice.Width * renderDevice.Height / 4) * MaxSamplesPerQuad,
-                .StructureByteStride = sizeof(ComputableSample),
             },
         }
     );
@@ -110,48 +97,6 @@ void MsaaGatherPass::Render(RenderDevice const& renderDevice, SceneGraphAssets c
 
 
 
-ComputableGatherPass::ComputableGatherPass(RenderDevice& renderDevice)
-{
-    // Create the rendering root signature.
-    RootSignature = renderDevice.CreateRootSignature<
-        Root::Cbv<  D3D12_SHADER_VISIBILITY_ALL,                0,                        0 >,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, 1,                     0>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<2, 1,                     0>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<1, 1,                     0>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<2, 2,                     0>>,
-        Root::Flags<D3D12_ROOT_SIGNATURE_FLAG_NONE>
-    >();
-
-    // Create the pipeline state, which includes compiling and loading shaders.
-    PipelineState = renderDevice.Create(Compute::State
-        {
-            .RootSignature{ RootSignature },
-            .CS           = std::span{VisDefMsaaPipeline_ComputableGatherPassShader},
-        }
-    );
-}
-
-void ComputableGatherPass::Render(RenderDevice const& renderDevice, SceneGraphAssets const& sceneGraphAssets, RenderPipelineAssets const& assets) const
-{
-    renderDevice.commandList->SetComputeRootSignature(RootSignature.Get());
-    renderDevice.commandList->SetPipelineState       (PipelineState.Get());
-
-    ID3D12DescriptorHeap* const heaps[]{ renderDevice.srvDescriptorHeap };
-    renderDevice.commandList->SetDescriptorHeaps(1, heaps);
-
-    renderDevice.commandList->SetComputeRootConstantBufferView(0, assets.SceneConstantsBuffer[renderDevice.frameIndex].Buffer->GetGPUVirtualAddress());
-    renderDevice.commandList->SetComputeRootDescriptorTable   (1, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(assets.VisibilityBuffer.SrvDescriptorIndex));
-    renderDevice.commandList->SetComputeRootDescriptorTable   (2, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(assets.DepthBuffer     .SrvDescriptorIndex));
-    renderDevice.commandList->SetComputeRootDescriptorTable   (3, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(assets.ComputableSampleBufferUav));
-    renderDevice.commandList->SetComputeRootDescriptorTable   (4, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(assets.MsaaSampleBufferUav));
-
-    renderDevice.commandList->Dispatch((renderDevice.Width + 31) / 32, (renderDevice.Height + 15) / 16, 1);
-
-    UavBarrier(renderDevice.commandList, assets.ComputableSampleBuffer);
-}
-
-
-
 ColorPass::ColorPass(RenderDevice& renderDevice)
 {
     // Create the rendering root signature.
@@ -161,7 +106,6 @@ ColorPass::ColorPass(RenderDevice& renderDevice)
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, 1,                        0>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<2, 1,                        0>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<0, 1,                        0>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<1, 1,                        0>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<2, 2,                        0>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS   , 1>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS   , 2>>,
@@ -197,17 +141,16 @@ void ColorPass::Render(RenderDevice const& renderDevice, SceneGraphAssets const&
     renderDevice.commandList->SetComputeRootDescriptorTable   (2, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(assets.VisibilityBuffer.SrvDescriptorIndex));
     renderDevice.commandList->SetComputeRootDescriptorTable   (3, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(assets.DepthBuffer     .SrvDescriptorIndex));
     renderDevice.commandList->SetComputeRootDescriptorTable   (4, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(assets.ColorBufferUav));
-    renderDevice.commandList->SetComputeRootDescriptorTable   (5, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(assets.ComputableSampleBufferUav));
-    renderDevice.commandList->SetComputeRootDescriptorTable   (6, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(assets.MsaaSampleBufferUav));
+    renderDevice.commandList->SetComputeRootDescriptorTable   (5, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(assets.MsaaSampleBufferUav));
 
-    renderDevice.commandList->SetComputeRootDescriptorTable( 7, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(sceneGraphAssets.ModelManager  .GetTriangleIndicesDescriptorTable   ()));
-    renderDevice.commandList->SetComputeRootDescriptorTable( 8, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(sceneGraphAssets.ModelManager  .GetTriangleParametersDescriptorTable()));
-    renderDevice.commandList->SetComputeRootDescriptorTable( 9, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(sceneGraphAssets.ModelManager  .GetVertexPositionsDescriptorTable   ()));
-    renderDevice.commandList->SetComputeRootDescriptorTable(10, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(sceneGraphAssets.ModelManager  .GetVertexAttributesDescriptorTable  ()));
-    renderDevice.commandList->SetComputeRootDescriptorTable(11, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(sceneGraphAssets.TextureManager.GetTexturesDescriptorTable          ()));
+    renderDevice.commandList->SetComputeRootDescriptorTable( 6, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(sceneGraphAssets.ModelManager  .GetTriangleIndicesDescriptorTable   ()));
+    renderDevice.commandList->SetComputeRootDescriptorTable( 7, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(sceneGraphAssets.ModelManager  .GetTriangleParametersDescriptorTable()));
+    renderDevice.commandList->SetComputeRootDescriptorTable( 8, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(sceneGraphAssets.ModelManager  .GetVertexPositionsDescriptorTable   ()));
+    renderDevice.commandList->SetComputeRootDescriptorTable( 9, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(sceneGraphAssets.ModelManager  .GetVertexAttributesDescriptorTable  ()));
+    renderDevice.commandList->SetComputeRootDescriptorTable(10, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(sceneGraphAssets.TextureManager.GetTexturesDescriptorTable          ()));
 
-    renderDevice.commandList->SetComputeRootShaderResourceView(12, sceneGraphAssets.MaterialManager.MaterialList.pResource->GetGPUVirtualAddress());
-    renderDevice.commandList->SetComputeRootDescriptorTable(13, renderDevice.samplerDescriptorHeap.GetGpuDescriptorHandle(0)); // TODO Samplers
+    renderDevice.commandList->SetComputeRootShaderResourceView(11, sceneGraphAssets.MaterialManager.MaterialList.pResource->GetGPUVirtualAddress());
+    renderDevice.commandList->SetComputeRootDescriptorTable(12, renderDevice.samplerDescriptorHeap.GetGpuDescriptorHandle(0)); // TODO Samplers
 
     renderDevice.commandList->Dispatch((renderDevice.Width + 63) / 64, (renderDevice.Height + 15) / 16, 1);
 
@@ -302,7 +245,6 @@ RenderPipeline::RenderPipeline(RenderDevice& renderDevice)
     : assets              { renderDevice }
     , visibilityPass      { renderDevice, 8 }
     , msaaGatherPass      { renderDevice }
-    , computableGatherPass{ renderDevice }
     , colorPass           { renderDevice }
     , postprocessPass     { renderDevice }
     , resolvePass         { renderDevice }
@@ -316,14 +258,7 @@ void RenderPipeline::Render(RenderDevice& renderDevice, SceneGraphAssets const& 
     float const width  = static_cast<float>(renderDevice.Width );
     float const height = static_cast<float>(renderDevice.Height);
 
-    sceneConstants->Size = XMUINT2(renderDevice.Width, renderDevice.Height);
-
-    // ViewPos.xy / z projected into [0..renderDevice.Width, 0..renderDevice.Height] screen space
-    sceneConstants->ProjectionScale = XMFLOAT2( -height / 2.0f,  height / 2.0f);
-    sceneConstants->ProjectionBias  = XMFLOAT2(  width  / 2.0f,  height / 2.0f);
-
-    sceneConstants->InverseProjectionScale = XMFLOAT2( -2.0f / height,  2.0f / height);
-    sceneConstants->InverseProjectionBias  = XMFLOAT2( width / height, -1.0f);
+    sceneConstants->ViewSpace = ViewSpace::CalculateConstants(width, height);
 
     // ViewPos.xy / z projected into [0..1, 0..1] normalized space
     sceneConstants->NormalizedProjectionScale = XMFLOAT2( height / (width * 2.0f), -1.0f / 2.0f);
@@ -331,9 +266,6 @@ void RenderPipeline::Render(RenderDevice& renderDevice, SceneGraphAssets const& 
 
     sceneConstants->InverseNormalizedProjectionScale = XMFLOAT2((width * 2.0f) / height, -2.0f);
     sceneConstants->InverseNormalizedProjectionBias  = XMFLOAT2(-width         / height,  1.0f);
-
-    sceneConstants->InverseAspectRatio = XMFLOAT2(height / width, -1.0f);
-    sceneConstants->AspectRatio        = XMFLOAT2(width / height, -1.0f);
 
     TransitionResource(renderDevice.commandList, assets.VisibilityBuffer.Resource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
     TransitionResource(renderDevice.commandList, assets.DepthBuffer     .Resource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_DEPTH_WRITE);
@@ -344,7 +276,6 @@ void RenderPipeline::Render(RenderDevice& renderDevice, SceneGraphAssets const& 
     TransitionResource(renderDevice.commandList, assets.DepthBuffer     .Resource, D3D12_RESOURCE_STATE_DEPTH_WRITE  , D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
     msaaGatherPass      .Render(renderDevice, sceneGraphAssets, assets);
-    computableGatherPass.Render(renderDevice, sceneGraphAssets, assets);
     colorPass           .Render(renderDevice, sceneGraphAssets, assets);
 
     postprocessPass.Render(renderDevice, assets);
