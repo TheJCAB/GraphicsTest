@@ -125,6 +125,7 @@ struct TextureManager
 
     TextureManager(RenderDevice&);
     Texture::Id AllocateNewTexture(RenderDevice&, AssetUploader&, std::string_view pathName);
+    Texture::Id AllocateNewHdrMap (RenderDevice&, AssetUploader&, std::string_view pathName);
 
     UINT GetTexturesDescriptorTable() const { return FirstSrv; }
 

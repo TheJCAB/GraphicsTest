@@ -166,6 +166,9 @@ Assets LoadAssets(RenderDevice& renderDevice)
         }
     );
 
+    assets.sceneGraphAssets->TextureManager.AllocateNewTexture(renderDevice, uploader, R"(X:\TEMP\Basketball_Court\Basketball_Court\BasketballCourt_8k.jpg)");
+    assets.sceneGraphAssets->TextureManager.AllocateNewHdrMap(renderDevice, uploader, R"(X:\TEMP\Basketball_Court\Basketball_Court\BasketballCourt_3k.hdr)");
+
     assets.cube             = assets.sceneGraphAssets->ModelManager.AllocateNewModel(renderDevice, CreateCubeModel(assets.sceneGraphAssets->MaterialManager.GetMaterialIndex(assets.DefaultMaterialId), uploader, renderDevice));
     assets.cubeInstances[0] = assets.sceneGraphAssets->InstanceManager.AllocateNewInstance(renderDevice, assets.sceneGraphAssets->ModelManager, Instance{assets.cube});
     assets.cubeInstances[1] = assets.sceneGraphAssets->InstanceManager.AllocateNewInstance(renderDevice, assets.sceneGraphAssets->ModelManager, Instance{assets.cube});
@@ -191,21 +194,8 @@ Assets LoadAssets(RenderDevice& renderDevice)
     //    }
     //}
 
-    //{
-    //    auto objModel = LoadObjModel(R"(C:\Users\jcab\Downloads\ameise\source\Ameise_C\Ameise_C.obj)");
-    //    RecenterObjModelPositions(objModel, 1);
-    //    AddObjEdgesAndAdjacency  (objModel);
-    //    AddObjModelMissingNormals(objModel);
-    //
-    //    for (auto& model : UploadObjModel(objModel, *assets.textureManager, *assets.materialManager, uploader, renderDevice))
-    //    {
-    //        auto const modelId = assets.modelManager->AllocateNewModel(renderDevice, std::move(model));
-    //        assets.objModelInstances.push_back(assets.instanceManager->AllocateNewInstance(renderDevice, *assets.modelManager, Instance{modelId}));
-    //    }
-    //}
-
     {
-        auto objModel = LoadObjModel(R"(C:\Users\jcab\Downloads\San_Miguel\san-miguel-low-poly.obj)");
+        auto objModel = LoadObjModel(R"(C:\Users\jcab\Downloads\ameise\source\Ameise_C\Ameise_C.obj)");
         RecenterObjModelPositions(objModel, 1);
         AddObjEdgesAndAdjacency  (objModel);
         AddObjModelMissingNormals(objModel);
@@ -213,9 +203,22 @@ Assets LoadAssets(RenderDevice& renderDevice)
         for (auto& model : UploadObjModel(objModel, assets.sceneGraphAssets->TextureManager, assets.sceneGraphAssets->MaterialManager, uploader, renderDevice))
         {
             auto const modelId = assets.sceneGraphAssets->ModelManager.AllocateNewModel(renderDevice, std::move(model));
-            assets.objModelInstances.push_back(assets.sceneGraphAssets->InstanceManager.AllocateNewInstance(renderDevice, assets.sceneGraphAssets->ModelManager, Instance{modelId, 1.0f, XMVectorSet(0, 0, 4, 6)}));
+            assets.objModelInstances.push_back(assets.sceneGraphAssets->InstanceManager.AllocateNewInstance(renderDevice, assets.sceneGraphAssets->ModelManager, Instance{modelId}));
         }
     }
+
+    //{
+    //    auto objModel = LoadObjModel(R"(C:\Users\jcab\Downloads\San_Miguel\san-miguel-low-poly.obj)");
+    //    RecenterObjModelPositions(objModel, 1);
+    //    AddObjEdgesAndAdjacency  (objModel);
+    //    AddObjModelMissingNormals(objModel);
+    //
+    //    for (auto& model : UploadObjModel(objModel, assets.sceneGraphAssets->TextureManager, assets.sceneGraphAssets->MaterialManager, uploader, renderDevice))
+    //    {
+    //        auto const modelId = assets.sceneGraphAssets->ModelManager.AllocateNewModel(renderDevice, std::move(model));
+    //        assets.objModelInstances.push_back(assets.sceneGraphAssets->InstanceManager.AllocateNewInstance(renderDevice, assets.sceneGraphAssets->ModelManager, Instance{modelId, 1.0f, XMVectorSet(0, 0, 4, 6)}));
+    //    }
+    //}
 
     return assets;
 }

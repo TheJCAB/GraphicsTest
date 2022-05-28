@@ -22,6 +22,8 @@ Texture::Id TextureManager::AllocateNewTexture(RenderDevice& renderDevice, Asset
         return id;
     }
 
+
+
     struct GdiplusStartup
     {
         ULONG_PTR gdiplusToken = UINTPTR_MAX;
@@ -33,7 +35,6 @@ Texture::Id TextureManager::AllocateNewTexture(RenderDevice& renderDevice, Asset
         }
     };
     static GdiplusStartup gdiplusStartup{};
-
 
     // Warning! Sooper-cheesy char to wchar_t conversion!
     std::unique_ptr<Gdiplus::Bitmap> bitmap{ new Gdiplus::Bitmap(std::wstring{pathName.begin(), pathName.end()}.c_str()) };
@@ -52,7 +53,7 @@ Texture::Id TextureManager::AllocateNewTexture(RenderDevice& renderDevice, Asset
     ++TextureCount;
 
     TextureList[index].Path = pathName;
-    TextureList[index].Resource = assetUploader.CreateStaticTexture(width, height, 0, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
+    TextureList[index].Resource = assetUploader.CreateStaticTexture(width, height, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, 0, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
         [&](uint32_t x, uint32_t y, uint32_t w, void* p)
         {
             auto const pSrc = reinterpret_cast<uint32_t const*>(reinterpret_cast<uintptr_t>(bitmapData.Scan0) + (height - 1 - y) * bitmapData.Stride + x * 4);
@@ -65,6 +66,160 @@ Texture::Id TextureManager::AllocateNewTexture(RenderDevice& renderDevice, Asset
     TextureList[index].HasAlpha = (pixelFormat & PixelFormatAlpha) != 0;
 
     bitmap->UnlockBits(&bitmapData);
+
+    renderDevice.UploadSrvDescriptor(FirstSrv + index, TextureList[index].Resource);
+
+    return id;
+}
+
+Texture::Id TextureManager::AllocateNewHdrMap(RenderDevice& renderDevice, AssetUploader& assetUploader, std::string_view pathName)
+{
+    if (auto const id = FindTexture(pathName))
+    {
+        return id;
+    }
+
+    auto const f = fopen(std::string{pathName.begin(), pathName.end()}.c_str(), "rb");
+    if (f == nullptr)
+    {
+        return Texture::Id::Invalid;
+    }
+
+    bool isValid = false;
+    uint32_t width = 0;
+    uint32_t height = 0;
+
+    while (!feof(f))
+    {
+        std::array<char, 1024> buffer;
+        buffer[0] = '\0';
+        fgets(buffer.data(), buffer.size(), f);
+        std::string_view line{ buffer.data() };
+        if (line.empty())
+        {
+            continue;
+        }
+        if (line.back() == '\n')
+        {
+            line = line.substr(0, line.size() - 1);
+        }
+        if (line == "#?RADIANCE")
+        {
+            isValid = true;
+        }
+        if (line.starts_with("-Y "))
+        {
+            sscanf_s(line.data(), "-Y %u +X %u", &height, &width);
+            break;
+        }
+    }
+
+    auto&& convertColor = [](int r, int g, int b, int e) -> std::array<float, 3>
+        {
+            if (e == 0)
+            {
+                return { 0.0f, 0.0f, 0.0f };
+            }
+            else
+            {
+                auto const mul = ldexp(1.0, e - (128 + 8));
+                return {
+                    static_cast<float>((r + 0.5) * mul),
+                    static_cast<float>((g + 0.5) * mul),
+                    static_cast<float>((b + 0.5) * mul),
+                };
+            }
+        };
+
+    std::vector<std::array<float, 3>> pixels;
+    pixels.resize(width * height);
+
+    for (uint32_t y = 0; y < height; ++y)
+    {
+        auto const p = pixels.data() + y * width;
+        int shift = 0;
+        for (uint32_t x = 0; x < width;)
+        {
+            auto const r = fgetc(f);
+            auto const g = fgetc(f);
+            auto const b = fgetc(f);
+            auto const e = fgetc(f);
+            if (x == 0 && r == 2 && g == 2 && (b & 128) == 0)
+            {
+                // More complex conversion.
+                assert(static_cast<uint32_t>((b << 8) + e) == width);
+                std::vector<int> components[4];
+                for (auto& component : components)
+                {
+                    x = 0;
+                    component.resize(width);
+                    while (x < width)
+                    {
+                        auto const code = fgetc(f);
+                        if (code > 128)
+                        {
+                            auto const value = fgetc(f);
+                            auto const run = x + (code & 127);
+                            for (; x < run; ++x)
+                            {
+                                component[x] = value;
+                            }
+                        }
+                        else
+                        {
+                            auto const run = x + code;
+                            for (; x < run; ++x)
+                            {
+                                component[x] = fgetc(f);
+                            }
+                        }
+                    }
+                }
+                for (x = 0; x < width; ++x)
+                {
+                    p[x] = convertColor(components[0][x], components[1][x], components[2][x], components[3][x]);
+                }
+            }
+            else if (r == 1 && g == 1 && b == 1)
+            {
+                assert(x > 0 || y > 0);
+                auto const run = x + e << shift;
+                for (; x < run; ++x)
+                {
+                    p[x] = p[static_cast<int>(x) - 1];
+                }
+                shift += 8;
+            }
+            else
+            {
+                shift = 0;
+                p[x] = convertColor(r, g, b, e);
+                ++x;
+            }
+        }
+    }
+
+    assert(TextureCount < TextureList.size());
+    auto const index = TextureCount;
+    auto const id = Texture::Id{ index + 1 };
+    ++TextureCount;
+
+    TextureList[index].Path = pathName;
+    TextureList[index].Resource = assetUploader.CreateStaticTexture(width, height, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
+        [&](uint32_t x, uint32_t y, uint32_t w, void* p)
+        {
+            auto const pDest = reinterpret_cast<std::array<float, 4>*>(p);
+            auto const pSrc = pixels.data() + (height - 1 - y) * width + x;
+            for (uint32_t i = 0; i < w; ++i)
+            {
+                pDest[i][0] = pSrc[i][0];
+                pDest[i][1] = pSrc[i][1];
+                pDest[i][2] = pSrc[i][2];
+                pDest[i][3] = 1.0f;
+            }
+        }
+    );
+    TextureList[index].HasAlpha = false;
 
     renderDevice.UploadSrvDescriptor(FirstSrv + index, TextureList[index].Resource);
 

@@ -21,6 +21,11 @@ struct ViewSpaceConstants
     // Includes the aspect ratio, FOV and size.
     XMFLOAT2 InverseProjectionScale;
     XMFLOAT2 InverseProjectionBias ;
+
+    XMUINT2 Padding;
+
+    XMFLOAT3X4 WorldToView;
+    XMFLOAT3X4 ViewToWorld;
 };
 
 #if HLSL
@@ -114,9 +119,9 @@ namespace ViewSpace
 {
 
 inline
-ViewSpaceConstants CalculateConstants(float const width, float const height)
+ViewSpaceConstants CalculateConstants(float const width, float const height, XMMATRIX worldToView)
 {
-    return ViewSpaceConstants
+    ViewSpaceConstants result
     {
         .Size = XMUINT2(width, height),
 
@@ -130,6 +135,11 @@ ViewSpaceConstants CalculateConstants(float const width, float const height)
         .InverseProjectionScale = XMFLOAT2( -2.0f / height,  2.0f / height),
         .InverseProjectionBias  = XMFLOAT2( width / height, -1.0f),
     };
+
+    XMStoreFloat3x4(&result.WorldToView, XMMatrixTranspose(worldToView));
+    XMStoreFloat3x4(&result.ViewToWorld, XMMatrixTranspose(XMMatrixInverse(nullptr, worldToView)));
+
+    return result;
 }
 
 }

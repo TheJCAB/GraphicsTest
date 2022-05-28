@@ -258,7 +258,7 @@ void RenderPipeline::Render(RenderDevice& renderDevice, SceneGraphAssets const& 
     float const width  = static_cast<float>(renderDevice.Width );
     float const height = static_cast<float>(renderDevice.Height);
 
-    sceneConstants->ViewSpace = ViewSpace::CalculateConstants(width, height);
+    sceneConstants->ViewSpace = ViewSpace::CalculateConstants(width, height, View);
 
     // ViewPos.xy / z projected into [0..1, 0..1] normalized space
     sceneConstants->NormalizedProjectionScale = XMFLOAT2( height / (width * 2.0f), -1.0f / 2.0f);

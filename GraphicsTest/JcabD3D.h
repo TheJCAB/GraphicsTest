@@ -686,7 +686,7 @@ public:
     void HoldPendingObject(ComPtr<IUnknown>);
 
     ComPtr<ID3D12Resource> CreateStaticBuffer (uint32_t size, D3D12_RESOURCE_STATES initialState, std::function<void(void*)> dataFill);
-    ComPtr<ID3D12Resource> CreateStaticTexture(uint32_t width, uint32_t height, uint32_t mips, D3D12_RESOURCE_STATES initialState, std::function<void(uint32_t x, uint32_t y, uint32_t w, void*)> dataFill);
+    ComPtr<ID3D12Resource> CreateStaticTexture(uint32_t width, uint32_t height, DXGI_FORMAT, uint32_t mips, D3D12_RESOURCE_STATES initialState, std::function<void(uint32_t x, uint32_t y, uint32_t w, void*)> dataFill);
 
     void GenerateMips(ComRef<ID3D12Resource> uavTexture)
     {

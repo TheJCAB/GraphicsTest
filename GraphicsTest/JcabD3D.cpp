@@ -657,6 +657,7 @@ ComPtr<ID3D12Resource> AssetUploader::CreateStaticBuffer(
 ComPtr<ID3D12Resource> AssetUploader::CreateStaticTexture(
     uint32_t                                                       width,
     uint32_t                                                       height,
+    DXGI_FORMAT                                                    format,
     uint32_t                                                       mips,
     D3D12_RESOURCE_STATES                                          initialState,
     std::function<void(uint32_t x, uint32_t y, uint32_t w, void*)> dataFill
@@ -664,7 +665,7 @@ ComPtr<ID3D12Resource> AssetUploader::CreateStaticTexture(
 {
     ComPtr<ID3D12Resource> texture;
 
-    Texture2DDesc desc{ width, height, mips, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB };
+    Texture2DDesc desc{ width, height, mips, format };
 
     ThrowIfFailed(m_device->CreateCommittedResource(
         &StaticBufferHeapProperties,
@@ -677,7 +678,7 @@ ComPtr<ID3D12Resource> AssetUploader::CreateStaticTexture(
     auto const textureDesc = texture->GetDesc();
 
     ComPtr<ID3D12Resource> uavTexture;
-    Texture2DDesc uavDesc{ width, height, textureDesc.MipLevels, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS };
+    Texture2DDesc uavDesc{ width, height, textureDesc.MipLevels, format, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS };
     ThrowIfFailed(m_device->CreateCommittedResource(
         &StaticBufferHeapProperties,
         D3D12_HEAP_FLAG_NONE,
@@ -721,7 +722,10 @@ ComPtr<ID3D12Resource> AssetUploader::CreateStaticTexture(
 
     TransitionResource(m_commandList, uavTexture, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-    GenerateMips(uavTexture);
+    if (mips != 1)
+    {
+        GenerateMips(uavTexture);
+    }
 
     TransitionResource(m_commandList, uavTexture, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
 
@@ -818,7 +822,7 @@ void MipGenerationPass::Render(ComRef<ID3D12Device> device, ComRef<ID3D12Graphic
 
         D3D12_UNORDERED_ACCESS_VIEW_DESC const uavDesc
         {
-            .Format        = DXGI_FORMAT_R8G8B8A8_UNORM, //desc.Format,// TODO: Properly detect SRGB and remove it as needed
+            .Format        = desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB ? DXGI_FORMAT_R8G8B8A8_UNORM : desc.Format,
             .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D,
             .Texture2D     { .MipSlice = i },
         };

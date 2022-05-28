@@ -37,6 +37,11 @@ float GetViewDepth(uint2 pos)
     return DepthToViewDepth(GetDepth(pos));
 }
 
+float3 ScreenPosToViewPos(float2 sPos, float viewPosZ)
+{
+    return float3((sPos * sceneConstants.ViewSpace.InverseProjectionScale + sceneConstants.ViewSpace.InverseProjectionBias) * viewPosZ, viewPosZ);
+}
+
 float3 GetViewPos(uint2 pos)
 {
     float depth = GetViewDepth(pos);
@@ -123,7 +128,13 @@ void ColorPass(uint3 pos : SV_DispatchThreadID)
     uint v = GetVisibility(pos.xy);
     if (v == 0)
     {
-        color = float3(0.1, 0, 0);
+        float3 viewDir = mul(normalize(ScreenPosToViewPos(pos.xy + 0.5f, -1.0f)), (float3x3)sceneConstants.ViewSpace.WorldToView);
+
+        float x = atan2(viewDir.x, -viewDir.z) / (2.0f * 3.141592f) + 0.5f;
+        float y = asin(viewDir.y)             /         3.141592f  + 0.5f;
+
+        color = textures[1].SampleLevel(defaultSampler, float2(x, y), 0).xyz;
+        //color = float3(0.1, 0, 0);
     }
     else
     {

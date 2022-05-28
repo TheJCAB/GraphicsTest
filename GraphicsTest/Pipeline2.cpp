@@ -232,7 +232,7 @@ void RenderPipeline::Render(RenderDevice& renderDevice, SceneGraphAssets const& 
     float const width  = static_cast<float>(renderDevice.Width );
     float const height = static_cast<float>(renderDevice.Height);
 
-    sceneConstants->ViewSpace = ViewSpace::CalculateConstants(width, height);
+    sceneConstants->ViewSpace = ViewSpace::CalculateConstants(width, height, View);
 
     static size_t offsetCount = 0;
 
