@@ -167,7 +167,10 @@ Assets LoadAssets(RenderDevice& renderDevice)
     );
 
     assets.sceneGraphAssets->TextureManager.AllocateNewTexture(renderDevice, uploader, R"(X:\TEMP\Basketball_Court\Basketball_Court\BasketballCourt_8k.jpg)");
+    assets.sceneGraphAssets->TextureManager.AllocateNewHdrMap(renderDevice, uploader, R"(X:\TEMP\Basketball_Court\Basketball_Court\BasketballCourt_Env.hdr)");
     assets.sceneGraphAssets->TextureManager.AllocateNewHdrMap(renderDevice, uploader, R"(X:\TEMP\Basketball_Court\Basketball_Court\BasketballCourt_3k.hdr)");
+    //assets.sceneGraphAssets->TextureManager.AllocateNewTexture(renderDevice, uploader, R"(X:\TEMP\Basketball_Court\Basketball_Court\BasketballCourt_preview.jpg)");
+    assets.sceneGraphAssets->TextureManager.AllocateNewTexture(renderDevice, uploader, R"(X:\TEMP\ibl_brdf_lut.png)", DXGI_FORMAT_R8G8B8A8_UNORM);
 
     assets.cube             = assets.sceneGraphAssets->ModelManager.AllocateNewModel(renderDevice, CreateCubeModel(assets.sceneGraphAssets->MaterialManager.GetMaterialIndex(assets.DefaultMaterialId), uploader, renderDevice));
     assets.cubeInstances[0] = assets.sceneGraphAssets->InstanceManager.AllocateNewInstance(renderDevice, assets.sceneGraphAssets->ModelManager, Instance{assets.cube});
@@ -194,9 +197,48 @@ Assets LoadAssets(RenderDevice& renderDevice)
     //    }
     //}
 
+    //{
+    //    auto objModel = LoadObjModel(R"(C:\Users\jcab\Downloads\ameise\source\Ameise_C\Ameise_C.obj)");
+    //    RecenterObjModelPositions(objModel, 1);
+    //    AddObjEdgesAndAdjacency  (objModel);
+    //    AddObjModelMissingNormals(objModel);
+    //
+    //    for (auto& model : UploadObjModel(objModel, assets.sceneGraphAssets->TextureManager, assets.sceneGraphAssets->MaterialManager, uploader, renderDevice))
+    //    {
+    //        auto const modelId = assets.sceneGraphAssets->ModelManager.AllocateNewModel(renderDevice, std::move(model));
+    //        assets.objModelInstances.push_back(assets.sceneGraphAssets->InstanceManager.AllocateNewInstance(renderDevice, assets.sceneGraphAssets->ModelManager, Instance{modelId}));
+    //    }
+    //}
+
+    //{
+    //    auto objModel = LoadObjModel(R"(X:\TEMP\fireplace_room\fireplace_room.obj)");
+    //    RecenterObjModelPositions(objModel, 1);
+    //    AddObjEdgesAndAdjacency  (objModel);
+    //    AddObjModelMissingNormals(objModel);
+    //
+    //    for (auto& model : UploadObjModel(objModel, assets.sceneGraphAssets->TextureManager, assets.sceneGraphAssets->MaterialManager, uploader, renderDevice))
+    //    {
+    //        auto const modelId = assets.sceneGraphAssets->ModelManager.AllocateNewModel(renderDevice, std::move(model));
+    //        assets.objModelInstances.push_back(assets.sceneGraphAssets->InstanceManager.AllocateNewInstance(renderDevice, assets.sceneGraphAssets->ModelManager, Instance{modelId}));
+    //    }
+    //}
+
+    //{
+    //    auto objModel = LoadObjModel(R"(X:\TEMP\breakfast_room\breakfast_room.obj)");
+    //    RecenterObjModelPositions(objModel, 1);
+    //    AddObjEdgesAndAdjacency  (objModel);
+    //    AddObjModelMissingNormals(objModel);
+    //
+    //    for (auto& model : UploadObjModel(objModel, assets.sceneGraphAssets->TextureManager, assets.sceneGraphAssets->MaterialManager, uploader, renderDevice))
+    //    {
+    //        auto const modelId = assets.sceneGraphAssets->ModelManager.AllocateNewModel(renderDevice, std::move(model));
+    //        assets.objModelInstances.push_back(assets.sceneGraphAssets->InstanceManager.AllocateNewInstance(renderDevice, assets.sceneGraphAssets->ModelManager, Instance{modelId}));
+    //    }
+    //}
+
     {
-        auto objModel = LoadObjModel(R"(C:\Users\jcab\Downloads\ameise\source\Ameise_C\Ameise_C.obj)");
-        RecenterObjModelPositions(objModel, 1);
+        auto objModel = LoadObjModel(R"(X:\TEMP\sponza\sponza.obj)");
+        RecenterObjModelPositions(objModel, 0.02f);
         AddObjEdgesAndAdjacency  (objModel);
         AddObjModelMissingNormals(objModel);
     
@@ -217,6 +259,19 @@ Assets LoadAssets(RenderDevice& renderDevice)
     //    {
     //        auto const modelId = assets.sceneGraphAssets->ModelManager.AllocateNewModel(renderDevice, std::move(model));
     //        assets.objModelInstances.push_back(assets.sceneGraphAssets->InstanceManager.AllocateNewInstance(renderDevice, assets.sceneGraphAssets->ModelManager, Instance{modelId, 1.0f, XMVectorSet(0, 0, 4, 6)}));
+    //    }
+    //}
+
+    //{
+    //    auto objModel = LoadObjModel(R"(X:\TEMP\CornellBox\CornellBox-Water.obj)");
+    //    RecenterObjModelPositions(objModel, 1);
+    //    AddObjEdgesAndAdjacency  (objModel);
+    //    AddObjModelMissingNormals(objModel);
+    //
+    //    for (auto& model : UploadObjModel(objModel, assets.sceneGraphAssets->TextureManager, assets.sceneGraphAssets->MaterialManager, uploader, renderDevice))
+    //    {
+    //        auto const modelId = assets.sceneGraphAssets->ModelManager.AllocateNewModel(renderDevice, std::move(model));
+    //        assets.objModelInstances.push_back(assets.sceneGraphAssets->InstanceManager.AllocateNewInstance(renderDevice, assets.sceneGraphAssets->ModelManager, Instance{modelId}));
     //    }
     //}
 

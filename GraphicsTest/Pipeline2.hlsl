@@ -66,6 +66,8 @@ struct GBufferSample
     BarycentricCoords Barycentric;
     float3            ViewNormal;
     float3            DiffuseColor;
+    float3            SpecularColor;
+    float             Alpha2;
 };
 
 GBufferSample GetGBufferSample(uint visibility, float3 viewPos)
@@ -80,13 +82,18 @@ GBufferSample GetGBufferSample(uint visibility, float3 viewPos)
     uint3 i = indices[modelIndex].Load(tri);
     uint materialIndex = triangleParams[modelIndex][tri].MaterialIndex;
     result.DiffuseColor = materials[materialIndex].DiffuseColor;
+    result.SpecularColor = materials[materialIndex].SpecularColor;
+    result.Alpha2 = materials[materialIndex].SpecularExponent;
     uint diffuseTextureId = materials[materialIndex].DiffuseTextureId;
+    uint bumpTextureId = materials[materialIndex].BumpTextureId;
+    uint specularTextureId = materials[materialIndex].SpecularTextureId;
     //float3 AmbientColor;
     //float3 DiffuseColor;
     //float3 SpecularColor;
     //float  SpecularExponent;
     //uint   DiffuseTextureId;
 
+    result.Alpha2 = 2.0f / (result.Alpha2 + 2.0f);
 
     result.Barycentric = GetBarycentric(sceneConstants.ViewSpace, vertexPositions[modelIndex], i, modelToView, viewPos);
 
@@ -97,7 +104,9 @@ GBufferSample GetGBufferSample(uint visibility, float3 viewPos)
     result.ViewPos    = viewPos;
     result.ViewNormal = normalize(mul(Interpolate(normal0, normal1, normal2, result.Barycentric.B), (float3x3)modelToView));
 
-    if (diffuseTextureId != 0)
+    float3 Tangent;
+
+    if ((diffuseTextureId | specularTextureId | bumpTextureId) != 0)
     {
         float2 uv0 = vertexAttributes[modelIndex][i[0]].UV;
         float2 uv1 = vertexAttributes[modelIndex][i[1]].UV;
@@ -106,7 +115,40 @@ GBufferSample GetGBufferSample(uint visibility, float3 viewPos)
         float2 ddx = Interpolate(uv0, uv1, uv2, result.Barycentric.dB_dx);
         float2 ddy = Interpolate(uv0, uv1, uv2, result.Barycentric.dB_dy);
 
-        result.DiffuseColor *= textures[diffuseTextureId - 1].SampleGrad(defaultSampler, uv, ddx, ddy).rgb;
+        if (diffuseTextureId != 0)
+        {
+            result.DiffuseColor = textures[diffuseTextureId - 1].SampleGrad(wrapSampler, uv, ddx, ddy).rgb;
+        }
+
+        if (specularTextureId != 0)
+        {
+            result.SpecularColor = textures[specularTextureId - 1].SampleGrad(wrapSampler, uv, ddx, ddy).rgb;
+        }
+
+        if (bumpTextureId != 0)
+        {
+            float2 bump = textures[bumpTextureId - 1].SampleGrad(wrapSampler, uv, ddx, ddy).xy - 0.5f;
+            float du_dSx = ddx.x;
+            float du_dSy = ddy.x;
+            float dv_dSx = ddx.y;
+            float dv_dSy = ddy.y;
+
+            //float dN_du = bump.x;
+            //float dN_dv = bump.y;
+            //float2 dN_dS = float2(dN_du * du_dSx + dN_dv * dv_dSx, dN_du * du_dSy + dN_dv * dv_dSy);
+
+            float3 dViewPos_dx = result.Barycentric.dViewPos_dx;
+            float3 dViewPos_dy = result.Barycentric.dViewPos_dy;
+
+            float3 tangent   = normalize(dViewPos_dx * du_dSx + dViewPos_dy * du_dSy);
+            //float3 cotangent = normalize(dViewPos_dx / abs(dv_dSx) + dViewPos_dy / abs(dv_dSy));
+            float3 cotangent = cross(result.ViewNormal, tangent);
+            //tangent   = cross(cotangent, result.ViewNormal);
+
+            //float3 dN = / dN_dS.x + result.Barycentric.dViewPos_dy / dN_dS.y;
+
+            result.ViewNormal = normalize(result.ViewNormal * sqrt(1.0f - dot(bump.xy, bump.xy)) + tangent * bump.x + cotangent * bump.y);
+        }
     }
 
     return result;
@@ -119,22 +161,37 @@ GBufferSample GetGBufferSample(uint visibility, float3 viewPos)
     //    ((color >> 16) & 0xFF) / 255.0f,
     //    ((color >> 24) & 0xFF) / 255.0f);
 
+float3 SampleSkymap(Texture2D<float4> map, float3 viewDir)
+{
+    float3 worldDir = mul(viewDir, (float3x3)sceneConstants.ViewSpace.WorldToView);
+
+    float x = atan2(worldDir.x, -worldDir.z) / (2.0f * 3.141592f) + 0.5f;
+    float y = asin(worldDir.y)               /         3.141592f  + 0.5f;
+
+    return map.SampleLevel(wrapSampler, float2(x, y), 0).xyz;
+}
+
+float3 SampleSkymapGrad(Texture2D<float4> map, float3 viewDir, float2 ddx, float2 ddy)
+{
+    float3 worldDir = mul(viewDir, (float3x3)sceneConstants.ViewSpace.WorldToView);
+
+    float x = atan2(worldDir.x, -worldDir.z) / (2.0f * 3.141592f) + 0.5f;
+    float y = asin(worldDir.y)               /         3.141592f  + 0.5f;
+
+    return map.SampleGrad(wrapSampler, float2(x, y), ddx, ddy).xyz;
+}
 
 [numthreads(64, 16, 1)]
 void ColorPass(uint3 pos : SV_DispatchThreadID)
 {
     float3 color = 0;
 
+    float3 viewDir = normalize(ScreenPosToViewPos(pos.xy + 0.5f, -1.0f));
+
     uint v = GetVisibility(pos.xy);
     if (v == 0)
     {
-        float3 viewDir = mul(normalize(ScreenPosToViewPos(pos.xy + 0.5f, -1.0f)), (float3x3)sceneConstants.ViewSpace.WorldToView);
-
-        float x = atan2(viewDir.x, -viewDir.z) / (2.0f * 3.141592f) + 0.5f;
-        float y = asin(viewDir.y)             /         3.141592f  + 0.5f;
-
-        color = textures[1].SampleLevel(defaultSampler, float2(x, y), 0).xyz;
-        //color = float3(0.1, 0, 0);
+        color = SampleSkymap(textures[0], viewDir).xyz;
     }
     else
     {
@@ -146,7 +203,28 @@ void ColorPass(uint3 pos : SV_DispatchThreadID)
 
         //albedo *= gSample.Barycentric;
 
-        color = float3(albedo * dot(gSample.ViewNormal, normalize(float3(1, 1, 1))));
+        float3 normalizedViewPos = normalize(viewPos);
+
+        float3 H = gSample.ViewNormal;
+        float reflectionCosine = max(0.0f, dot(H, -normalizedViewPos));
+
+        float3 F0 = gSample.SpecularColor; //float3(0.03f, 0.03f, 0.03f);
+        float3 F = F0 + (1.0 - F0) * pow(1.0 - reflectionCosine, 5.0);
+
+        float3 reflectViewPos = normalizedViewPos - 2.0f * dot(normalizedViewPos, gSample.ViewNormal) * gSample.ViewNormal;
+
+        float roughness = sqrt(sqrt(gSample.Alpha2));
+        float2 specularBrdf = textures[3].SampleLevel(clampSampler, float2(reflectionCosine, roughness), 0).xy;
+
+        float3 specularLight = (F * specularBrdf.x + specularBrdf.y) * SampleSkymapGrad(textures[2], reflectViewPos, float2(0.5f, 0.25f) * roughness, float2(0.5f, 0.25f) * roughness).xyz;
+
+
+        float3 diffuseLight = albedo * (1.0f - F) * SampleSkymap(textures[1], gSample.ViewNormal).xyz;
+
+
+        color = diffuseLight + specularLight;
+
+        //color = albedo * light; //dot(gSample.ViewNormal, normalize(float3(1, 1, 1))));
     }
 
     uint2 spos = pos.xy;
@@ -252,7 +330,7 @@ void Postprocess(uint3 pos : SV_DispatchThreadID)
             return;
         }
 
-        taaColorUav[pos.xy] = SampleTextureCatmullRom(previousTaaColorSrv, defaultSampler, lastFramePos, sceneConstants.ViewSpace.Size);
+        taaColorUav[pos.xy] = SampleTextureCatmullRom(previousTaaColorSrv, wrapSampler, lastFramePos, sceneConstants.ViewSpace.Size);
     }
 #endif
 
@@ -293,8 +371,8 @@ void Postprocess(uint3 pos : SV_DispatchThreadID)
 
         float taaBlendFactor = TaaBlendFactor * (1.0f - (normalizedDistanceInPixels * normalizedDistanceInPixels) * (normalizedDistanceInPixels * normalizedDistanceInPixels));
 
-        float3 previousColor = SampleTextureCatmullRom(previousTaaColorSrv, defaultSampler, lastFramePos, sceneConstants.ViewSpace.Size).xyz;
-        //float3 previousColor = previousTaaColorSrv.SampleLevel(defaultSampler, lastFramePos, 0).xyz;
+        float3 previousColor = SampleTextureCatmullRom(previousTaaColorSrv, wrapSampler, lastFramePos, sceneConstants.ViewSpace.Size).xyz;
+        //float3 previousColor = previousTaaColorSrv.SampleLevel(wrapSampler, lastFramePos, 0).xyz;
 
 #if 0
         uint2 pos0 = pos.xy + uint2( 1, 0);
@@ -318,7 +396,7 @@ void Postprocess(uint3 pos : SV_DispatchThreadID)
         float lastFrameViewPosZMax = max(max(lastFrameViewPos.z, lastFrameViewPosZ0), max(max(lastFrameViewPosZ1, lastFrameViewPosZ2), min(max(lastFrameViewPosZ3, max(lastFrameViewPosZ4, lastFrameViewPosZ5)), max(lastFrameViewPosZ6, lastFrameViewPosZ7))));
 
         float halfDepthRange = (lastFrameViewPosZMax - lastFrameViewPosZMin) / 2.0f;
-        float previousDepth = DepthToViewDepth(previousDepthSrv.SampleLevel(defaultSampler, lastFramePos, 0).x);
+        float previousDepth = DepthToViewDepth(previousDepthSrv.SampleLevel(wrapSampler, lastFramePos, 0).x);
         if (previousDepth + halfDepthRange < lastFrameViewPosZMin || previousDepth - halfDepthRange > lastFrameViewPosZMax)
         {
             // Reject if the depth doesn't correspond.

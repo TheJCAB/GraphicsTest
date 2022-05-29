@@ -21,6 +21,7 @@ struct ObjMaterial
     float                                Opacity          = 1;
     std::optional<std::filesystem::path> DiffuseTexture   {};
     std::optional<std::filesystem::path> BumpTexture      {};
+    std::optional<std::filesystem::path> SpecularTexture  {};
 };
 
 struct ObjModel

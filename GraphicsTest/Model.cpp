@@ -15,14 +15,12 @@ TextureManager::TextureManager(RenderDevice& renderDevice)
     FirstSrv = renderDevice.srvDescriptorHeap.AllocateDescriptors(MAX_TEXTURES);
 }
 
-Texture::Id TextureManager::AllocateNewTexture(RenderDevice& renderDevice, AssetUploader& assetUploader, std::string_view pathName)
+Texture::Id TextureManager::AllocateNewTexture(RenderDevice& renderDevice, AssetUploader& assetUploader, std::string_view const pathName, DXGI_FORMAT const format)
 {
     if (auto const id = FindTexture(pathName))
     {
         return id;
     }
-
-
 
     struct GdiplusStartup
     {
@@ -53,7 +51,7 @@ Texture::Id TextureManager::AllocateNewTexture(RenderDevice& renderDevice, Asset
     ++TextureCount;
 
     TextureList[index].Path = pathName;
-    TextureList[index].Resource = assetUploader.CreateStaticTexture(width, height, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, 0, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
+    TextureList[index].Resource = assetUploader.CreateStaticTexture(width, height, format, 0, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
         [&](uint32_t x, uint32_t y, uint32_t w, void* p)
         {
             auto const pSrc = reinterpret_cast<uint32_t const*>(reinterpret_cast<uintptr_t>(bitmapData.Scan0) + (height - 1 - y) * bitmapData.Stride + x * 4);
@@ -205,7 +203,7 @@ Texture::Id TextureManager::AllocateNewHdrMap(RenderDevice& renderDevice, AssetU
     ++TextureCount;
 
     TextureList[index].Path = pathName;
-    TextureList[index].Resource = assetUploader.CreateStaticTexture(width, height, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
+    TextureList[index].Resource = assetUploader.CreateStaticTexture(width, height, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
         [&](uint32_t x, uint32_t y, uint32_t w, void* p)
         {
             auto const pDest = reinterpret_cast<std::array<float, 4>*>(p);
@@ -276,6 +274,30 @@ Material::Id MaterialManager::AllocateNewMaterial(RenderDevice& renderDevice, As
     else
     {
         params.DiffuseTextureId = Texture::Id::Invalid;
+    }
+    if (!material.BumpTexturePathName.empty())
+    {
+        params.BumpTextureId = textureManager.AllocateNewTexture(renderDevice, assetUploader, material.BumpTexturePathName, DXGI_FORMAT_R8G8B8A8_UNORM);
+        if (textureManager.GetTexture(params.BumpTextureId).HasAlpha)
+        {
+            // ?
+        }
+    }
+    else
+    {
+        params.BumpTextureId = Texture::Id::Invalid;
+    }
+    if (!material.SpecularTexturePathName.empty())
+    {
+        params.SpecularTextureId = textureManager.AllocateNewTexture(renderDevice, assetUploader, material.SpecularTexturePathName, DXGI_FORMAT_R8G8B8A8_UNORM);
+        if (textureManager.GetTexture(params.SpecularTextureId).HasAlpha)
+        {
+            // ?
+        }
+    }
+    else
+    {
+        params.SpecularTextureId = Texture::Id::Invalid;
     }
 
     return id;
@@ -495,7 +517,7 @@ VisibilityPass::VisibilityPass(RenderDevice& renderDevice, uint32_t msaa)
             Root::Table    <D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange    <1, MAX_MODEL_DEFINITIONS   , 2>>, // Triangle paramters
             Root::Table    <D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange    <1, MAX_TEXTURES            , 5>>, // Textures
             Root::Srv      <D3D12_SHADER_VISIBILITY_ALL,                    0                          , 5 >, // Materials
-            Root::Table    <D3D12_SHADER_VISIBILITY_ALL, Root::SamplerRange<0, 1                       , 0>>,
+            Root::Table    <D3D12_SHADER_VISIBILITY_ALL, Root::SamplerRange<0, 2                       , 0>>,
             Root::Flags    <D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT>
         >{}
     );

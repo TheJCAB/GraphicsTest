@@ -37,6 +37,8 @@ struct BarycentricCoords
     float3 B;
     float3 dB_dx;
     float3 dB_dy;
+    float3 dViewPos_dx;
+    float3 dViewPos_dy;
 };
 
 // Get the barycentric coordinates and their deltas, given the triangle's geometry and a position in view space.
@@ -48,6 +50,11 @@ BarycentricCoords GetBarycentric(ViewSpaceConstants viewSpace, StructuredBuffer<
 
     // N is the normal to the triangle, and its length is the area.
     float3 N = cross(viewPos1 - viewPos0, viewPos2 - viewPos0);
+    float3 normalizedN = normalize(N);
+
+    // Normalized vectors in the triangle plane, along the screen axes.
+    float2 T_x = normalize(float2(N.z, -N.x));
+    float2 T_y = normalize(float2(N.z,  N.y));
 
     // Back-project the viewPos deltas of the pixel deltas, along each axis, the Z plane of viewPos.
     float dViewPosX_dx = viewSpace.InverseProjectionScale.x * viewPos.z;
@@ -79,12 +86,20 @@ BarycentricCoords GetBarycentric(ViewSpaceConstants viewSpace, StructuredBuffer<
 
     float3 N_N2 = N / dot(N, N);
 
-    result.B    [1] =  dot(cross(viewPos2 - viewPos   , viewPos0 - viewPos   ), N_N2);
-    result.B    [2] =  dot(cross(viewPos0 - viewPos   , viewPos1 - viewPos   ), N_N2);
-    result.dB_dx[1] = (dot(cross(viewPos2 - viewPos_dx, viewPos0 - viewPos_dx), N_N2) - result.B[1]) * signX;
-    result.dB_dx[2] = (dot(cross(viewPos0 - viewPos_dx, viewPos1 - viewPos_dx), N_N2) - result.B[2]) * signX;
-    result.dB_dy[1] = (dot(cross(viewPos2 - viewPos_dy, viewPos0 - viewPos_dy), N_N2) - result.B[1]) * signY;
-    result.dB_dy[2] = (dot(cross(viewPos0 - viewPos_dy, viewPos1 - viewPos_dy), N_N2) - result.B[2]) * signY;
+    result.dViewPos_dx = viewSpace.InverseProjectionScale.x * viewPos.z * (float3(1.0f, 0.0f, 0.0f) - normalizedN.x * viewPos / max(dot(viewPos, normalizedN), 0.00001f));
+    result.dViewPos_dy = viewSpace.InverseProjectionScale.y * viewPos.z * (float3(0.0f, 1.0f, 0.0f) - normalizedN.y * viewPos / max(dot(viewPos, normalizedN), 0.00001f));
+
+    //result.dViewPos_dx = viewSpace.InverseProjectionScale.x * viewPos.z * float3(T_x.x, 0.0f, T_x.y);
+    //result.dViewPos_dy = viewSpace.InverseProjectionScale.y * viewPos.z * float3(0.0f, T_y.x, T_y.y);
+
+    //result.dViewPos_dy = (viewPos_dy - viewPos) * signY;
+
+    result.B    [1] =  dot(cross(viewPos2 - viewPos              , viewPos0 - viewPos   ), N_N2);
+    result.B    [2] =  dot(cross(viewPos0 - viewPos              , viewPos1 - viewPos   ), N_N2);
+    result.dB_dx[1] = (dot(cross(viewPos2 - viewPos - result.dViewPos_dx, viewPos0 - viewPos - result.dViewPos_dx), N_N2) - result.B[1]);
+    result.dB_dx[2] = (dot(cross(viewPos0 - viewPos - result.dViewPos_dx, viewPos1 - viewPos - result.dViewPos_dx), N_N2) - result.B[2]);
+    result.dB_dy[1] = (dot(cross(viewPos2 - viewPos - result.dViewPos_dy, viewPos0 - viewPos - result.dViewPos_dy), N_N2) - result.B[1]);
+    result.dB_dy[2] = (dot(cross(viewPos0 - viewPos - result.dViewPos_dy, viewPos1 - viewPos - result.dViewPos_dy), N_N2) - result.B[2]);
 
     result. B   [0] = 1.0f - (result.B    [1] + result.B    [2]);
     result.dB_dx[0] =      - (result.dB_dx[1] + result.dB_dx[2]); // Note: barycentric deltas add up to zero, not one.

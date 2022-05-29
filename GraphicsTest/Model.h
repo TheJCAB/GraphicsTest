@@ -51,6 +51,8 @@ struct MaterialParameters
     XMFLOAT3  SpecularColor;
     float     SpecularExponent;
     TextureId DiffuseTextureId;
+    TextureId BumpTextureId;
+    TextureId SpecularTextureId;
     uint32_t  Flags;
 };
 
@@ -95,7 +97,8 @@ StructuredBuffer<MaterialParameters>  materials                               : 
 
 StructuredBuffer<InstanceAttributes> instanceList : register(t0, space0);
 
-sampler defaultSampler : register(s0, space0);
+sampler wrapSampler : register(s0, space0);
+sampler clampSampler : register(s1, space0);
 
 #else // !HLSL
 
@@ -124,7 +127,7 @@ struct TextureManager
     UINT                              FirstSrv = 0;
 
     TextureManager(RenderDevice&);
-    Texture::Id AllocateNewTexture(RenderDevice&, AssetUploader&, std::string_view pathName);
+    Texture::Id AllocateNewTexture(RenderDevice&, AssetUploader&, std::string_view pathName, DXGI_FORMAT = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
     Texture::Id AllocateNewHdrMap (RenderDevice&, AssetUploader&, std::string_view pathName);
 
     UINT GetTexturesDescriptorTable() const { return FirstSrv; }
@@ -153,6 +156,8 @@ struct Material
     XMFLOAT3    SpecularColor;
     float       SpecularExponent;
     std::string DiffuseTexturePathName;
+    std::string BumpTexturePathName;
+    std::string SpecularTexturePathName;
 };
 
 struct MaterialManager

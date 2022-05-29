@@ -1,6 +1,7 @@
 
 #include "JcabD3D.h"
 
+#include "MipGenerationPassShaderSRGB.h"
 #include "MipGenerationPassShader.h"
 
 ComPtr<IDXGIAdapter1> FindHardwareAdapter(ComRef<IDXGIFactory1> pFactory, bool requestHighPerformanceAdapter)
@@ -242,6 +243,21 @@ RenderDevice RenderDevice::Create(HWND const hwnd, uint32_t const width, uint32_
             .MaxLOD         = D3D12_FLOAT32_MAX,
         };
         renderDevice.device->CreateSampler(&wrapSamplerDesc, handle);
+
+        D3D12_SAMPLER_DESC const clampSamplerDesc
+        {
+            .Filter         = D3D12_FILTER_MIN_MAG_MIP_LINEAR,
+            .AddressU       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+            .AddressV       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+            .AddressW       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+            .MipLODBias     = 0.0f,
+            .MaxAnisotropy  = 1,
+            .ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS,
+            .BorderColor    {},
+            .MinLOD         = 0,
+            .MaxLOD         = D3D12_FLOAT32_MAX,
+        };
+        renderDevice.device->CreateSampler(&wrapSamplerDesc, handle);
     }
 
     // Create frame resources.
@@ -472,7 +488,7 @@ ComPtr<ID3D12Resource> CreateUploadConstantBuffer(
 ComPtr<ID3DBlob> Compile(Shader const& shader)
 {
     ComPtr<ID3DBlob> compiledShader;
-#if defined(_DEBUG)
+#if !defined(NDEBUG)
     // Enable better shader debugging with the graphics debugging tools.
     auto const compileFlags = shader.Flags | D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
 #else
@@ -759,6 +775,12 @@ MipGenerationPass::MipGenerationPass(RenderDevice const& renderDevice)
     >();
 
     // Create the pipeline state, which includes compiling and loading shaders.
+    PipelineStateSRGB = renderDevice.Create(Compute::State
+        {
+            .RootSignature{ RootSignature },
+            .CS           = std::span{MipGenerationPassShaderSRGB},
+        }
+    );
     PipelineState = renderDevice.Create(Compute::State
         {
             .RootSignature{ RootSignature },
@@ -775,7 +797,7 @@ void MipGenerationPass::Render(ComRef<ID3D12Device> device, ComRef<ID3D12Graphic
     auto samplerHeap    = DescriptorHeap<D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER    >::Create(device, 1                       , D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
 
     commandList->SetComputeRootSignature(RootSignature.Get());
-    commandList->SetPipelineState       (PipelineState.Get());
+    commandList->SetPipelineState       (desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB ? PipelineStateSRGB.Get() : PipelineState.Get());
 
     auto const sampler = samplerHeap.AllocateDescriptors(1);
 

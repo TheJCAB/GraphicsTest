@@ -22,6 +22,11 @@ function(add_hlsl_shader TargetName HlslFile ShaderModel FunctionName ShaderName
             # Someday: -HV 2021
         MAIN_DEPENDENCY
             "${CMAKE_CURRENT_SOURCE_DIR}/${HlslFile}"
+        DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/HLSL.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/Model.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/ViewSpace.h"
+            ${ARGN}
         OUTPUT
             "${SHADERS_DIR}/${ShaderName}.h"
     )
@@ -54,24 +59,25 @@ add_hlsl_shader(GraphicsTest Model.hlsl "ps_6_0" VisibilitySolidPS     Model_Vis
 add_hlsl_shader(GraphicsTest Model.hlsl "vs_6_0" VisibilityAlphaTestVS Model_VisibilityAlphaTestVSShader)
 add_hlsl_shader(GraphicsTest Model.hlsl "ps_6_0" VisibilityAlphaTestPS Model_VisibilityAlphaTestPSShader)
 
-add_hlsl_shader(GraphicsTest Pipeline.hlsl "cs_6_0" MsaaGatherPass       VisDefMsaaPipeline_MsaaGatherPassShader      )
-add_hlsl_shader(GraphicsTest Pipeline.hlsl "cs_6_0" ColorPass            VisDefMsaaPipeline_ColorPassShader           )
-add_hlsl_shader(GraphicsTest Pipeline.hlsl "cs_6_0" Postprocess          VisDefMsaaPipeline_PostprocessShader         )
-add_hlsl_shader(GraphicsTest Pipeline.hlsl "vs_6_0" ResolveVS            VisDefMsaaPipeline_ResolveVSShader           )
-add_hlsl_shader(GraphicsTest Pipeline.hlsl "ps_6_0" ResolvePS            VisDefMsaaPipeline_ResolvePSShader           )
+add_hlsl_shader(GraphicsTest Pipeline.hlsl "cs_6_0" MsaaGatherPass VisDefMsaaPipeline_MsaaGatherPassShader Pipeline.h)
+add_hlsl_shader(GraphicsTest Pipeline.hlsl "cs_6_0" ColorPass      VisDefMsaaPipeline_ColorPassShader      Pipeline.h)
+add_hlsl_shader(GraphicsTest Pipeline.hlsl "cs_6_0" Postprocess    VisDefMsaaPipeline_PostprocessShader    Pipeline.h)
+add_hlsl_shader(GraphicsTest Pipeline.hlsl "vs_6_0" ResolveVS      VisDefMsaaPipeline_ResolveVSShader      Pipeline.h)
+add_hlsl_shader(GraphicsTest Pipeline.hlsl "ps_6_0" ResolvePS      VisDefMsaaPipeline_ResolvePSShader      Pipeline.h)
 
-add_hlsl_shader(GraphicsTest Pipeline2.hlsl "cs_6_0" ColorPass             VisDefPipeline_ColorPassShader            )
-add_hlsl_shader(GraphicsTest Pipeline2.hlsl "cs_6_0" Postprocess           VisDefPipeline_PostprocessShader          )
-add_hlsl_shader(GraphicsTest Pipeline2.hlsl "vs_6_0" ResolveVS             VisDefPipeline_ResolveVSShader            )
-add_hlsl_shader(GraphicsTest Pipeline2.hlsl "ps_6_0" ResolvePS             VisDefPipeline_ResolvePSShader            )
+add_hlsl_shader(GraphicsTest Pipeline2.hlsl "cs_6_0" ColorPass   VisDefPipeline_ColorPassShader   Pipeline2.h)
+add_hlsl_shader(GraphicsTest Pipeline2.hlsl "cs_6_0" Postprocess VisDefPipeline_PostprocessShader Pipeline2.h)
+add_hlsl_shader(GraphicsTest Pipeline2.hlsl "vs_6_0" ResolveVS   VisDefPipeline_ResolveVSShader   Pipeline2.h)
+add_hlsl_shader(GraphicsTest Pipeline2.hlsl "ps_6_0" ResolvePS   VisDefPipeline_ResolvePSShader   Pipeline2.h)
 
-add_hlsl_shader(GraphicsTest Pipeline3.hlsl "cs_6_0" MsaaGatherPass VisDefMsaa3Pipeline_MsaaGatherPassShader)
-add_hlsl_shader(GraphicsTest Pipeline3.hlsl "cs_6_0" ColorPass      VisDefMsaa3Pipeline_ColorPassShader     )
-add_hlsl_shader(GraphicsTest Pipeline3.hlsl "cs_6_0" Postprocess    VisDefMsaa3Pipeline_PostprocessShader   )
-add_hlsl_shader(GraphicsTest Pipeline3.hlsl "vs_6_0" ResolveVS      VisDefMsaa3Pipeline_ResolveVSShader     )
-add_hlsl_shader(GraphicsTest Pipeline3.hlsl "ps_6_0" ResolvePS      VisDefMsaa3Pipeline_ResolvePSShader     )
+add_hlsl_shader(GraphicsTest Pipeline3.hlsl "cs_6_0" MsaaGatherPass VisDefMsaa3Pipeline_MsaaGatherPassShader Pipeline3.h)
+add_hlsl_shader(GraphicsTest Pipeline3.hlsl "cs_6_0" ColorPass      VisDefMsaa3Pipeline_ColorPassShader      Pipeline3.h)
+add_hlsl_shader(GraphicsTest Pipeline3.hlsl "cs_6_0" Postprocess    VisDefMsaa3Pipeline_PostprocessShader    Pipeline3.h)
+add_hlsl_shader(GraphicsTest Pipeline3.hlsl "vs_6_0" ResolveVS      VisDefMsaa3Pipeline_ResolveVSShader      Pipeline3.h)
+add_hlsl_shader(GraphicsTest Pipeline3.hlsl "ps_6_0" ResolvePS      VisDefMsaa3Pipeline_ResolvePSShader      Pipeline3.h)
 
-add_hlsl_shader(GraphicsTest JcabD3D.hlsl "cs_6_0" MipGenerationPass MipGenerationPassShader)
+add_hlsl_shader(GraphicsTest JcabD3D.hlsl "cs_6_0" MipGenerationPassSRGB MipGenerationPassShaderSRGB)
+add_hlsl_shader(GraphicsTest JcabD3D.hlsl "cs_6_0" MipGenerationPass     MipGenerationPassShader)
 
 target_compile_definitions(GraphicsTest PRIVATE UNICODE _UNICODE)
 

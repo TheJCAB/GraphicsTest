@@ -57,7 +57,7 @@ ColorPass::ColorPass(RenderDevice& renderDevice)
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS   , 4>>, // Vertex attributes
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_TEXTURES            , 5>>, // Textures
         Root::Srv  <D3D12_SHADER_VISIBILITY_ALL,                0,                           5 >, // Materials
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SamplerRange<0, 1, 0>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SamplerRange<0, 2, 0>>,
         Root::Flags<D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT>
     >();
 
@@ -118,7 +118,7 @@ PostprocessPass::PostprocessPass(RenderDevice& renderDevice)
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<4, 1, 0>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<5, 1, 0>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<0, 1, 0>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SamplerRange<0, 1, 0>>
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SamplerRange<0, 2, 0>>
     >();
 
     // Create the pipeline state, which includes compiling and loading shaders.

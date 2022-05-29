@@ -268,10 +268,10 @@ GBufferSample GetGBufferSample(uint visibility, float3 viewPos)
             uv1 * result.Barycentric.dB_dy[1] +
             uv2 * result.Barycentric.dB_dy[2];
 
-        result.DiffuseColor[0] *= textures[diffuseTextureId - 1].SampleGrad(defaultSampler, uv - ddx * 0.5f - ddy * 0.5f, ddx, ddy).rgb;
-        result.DiffuseColor[1] *= textures[diffuseTextureId - 1].SampleGrad(defaultSampler, uv + ddx * 0.5f - ddy * 0.5f, ddx, ddy).rgb;
-        result.DiffuseColor[2] *= textures[diffuseTextureId - 1].SampleGrad(defaultSampler, uv - ddx * 0.5f + ddy * 0.5f, ddx, ddy).rgb;
-        result.DiffuseColor[3] *= textures[diffuseTextureId - 1].SampleGrad(defaultSampler, uv + ddx * 0.5f + ddy * 0.5f, ddx, ddy).rgb;
+        result.DiffuseColor[0] = textures[diffuseTextureId - 1].SampleGrad(wrapSampler, uv - ddx * 0.5f - ddy * 0.5f, ddx, ddy).rgb;
+        result.DiffuseColor[1] = textures[diffuseTextureId - 1].SampleGrad(wrapSampler, uv + ddx * 0.5f - ddy * 0.5f, ddx, ddy).rgb;
+        result.DiffuseColor[2] = textures[diffuseTextureId - 1].SampleGrad(wrapSampler, uv - ddx * 0.5f + ddy * 0.5f, ddx, ddy).rgb;
+        result.DiffuseColor[3] = textures[diffuseTextureId - 1].SampleGrad(wrapSampler, uv + ddx * 0.5f + ddy * 0.5f, ddx, ddy).rgb;
     }
 
     return result;

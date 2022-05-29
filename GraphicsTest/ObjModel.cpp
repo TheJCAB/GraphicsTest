@@ -8,6 +8,19 @@
 #include <string_view>
 #include <filesystem>
 
+std::string_view TrimLine(std::string_view line)
+{
+    if (auto const pos = line.find_first_not_of(" \t"); pos != line.npos)
+    {
+        line = line.substr(pos);
+    }
+    if (auto const pos = line.find_last_not_of(" \t\r\n"); pos != line.npos)
+    {
+        line = line.substr(0, pos + 1);
+    }
+    return line;
+}
+
 std::map<std::string, ObjMaterial> LoadObjMaterials(std::filesystem::path filePath)
 {
     std::map<std::string, ObjMaterial> materials;
@@ -25,6 +38,7 @@ std::map<std::string, ObjMaterial> LoadObjMaterials(std::filesystem::path filePa
         buffer[0] = '\0';
         fgets(buffer.data(), buffer.size(), f);
         std::string_view line{ buffer.data() };
+        line = TrimLine(line);
         if (line.empty())
         {
             continue;
@@ -74,6 +88,18 @@ std::map<std::string, ObjMaterial> LoadObjMaterials(std::filesystem::path filePa
             path.replace_filename(line.substr(line.find_first_not_of(" \t", 7)));
             material->DiffuseTexture = path;
         }
+        else if (line.starts_with("map_Bump "))
+        {
+            auto path = filePath;
+            path.replace_filename(line.substr(line.find_first_not_of(" \t", 9)));
+            material->BumpTexture = path;
+        }
+        else if (line.starts_with("map_Spec "))
+        {
+            auto path = filePath;
+            path.replace_filename(line.substr(line.find_first_not_of(" \t", 9)));
+            material->SpecularTexture = path;
+        }
     }
 
     return materials;
@@ -113,6 +139,7 @@ ObjModel LoadObjModel(char const* pFilename)
         buffer[0] = '\0';
         fgets(buffer.data(), buffer.size(), f);
         std::string_view line{ buffer.data() };
+        line = TrimLine(line);
         if (line.empty())
         {
             continue;
@@ -432,11 +459,13 @@ std::vector<Model> UploadObjModel(ObjModel const& model, TextureManager& texture
             auto& objMaterial = model.Materials[triangle.Material];
             materialId = materialManager.AllocateNewMaterial(renderDevice, uploader, textureManager,
                 Material{
-                    .AmbientColor           = objMaterial.AmbientColor,
-                    .DiffuseColor           = objMaterial.DiffuseColor,
-                    .SpecularColor          = objMaterial.SpecularColor,
-                    .SpecularExponent       = objMaterial.SpecularExponent,
-                    .DiffuseTexturePathName = objMaterial.DiffuseTexture.value_or("").string(),
+                    .AmbientColor            = objMaterial.AmbientColor,
+                    .DiffuseColor            = objMaterial.DiffuseColor,
+                    .SpecularColor           = objMaterial.SpecularColor,
+                    .SpecularExponent        = objMaterial.SpecularExponent,
+                    .DiffuseTexturePathName  = objMaterial.DiffuseTexture.value_or("").string(),
+                    .BumpTexturePathName     = objMaterial.BumpTexture.value_or("").string(),
+                    .SpecularTexturePathName = objMaterial.SpecularTexture.value_or("").string(),
                 }
             );
         }

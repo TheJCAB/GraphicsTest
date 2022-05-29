@@ -113,7 +113,7 @@ ColorPass::ColorPass(RenderDevice& renderDevice)
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS   , 4>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MATERIAL_DEFINITIONS, 5>>,
         Root::Srv  <D3D12_SHADER_VISIBILITY_ALL,                0,                           5 >,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SamplerRange<0, 1, 0>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SamplerRange<0, 2, 0>>,
         Root::Flags<D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT>
     >();
 

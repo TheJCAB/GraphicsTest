@@ -667,6 +667,7 @@ class AssetUploader;
 struct MipGenerationPass
 {
     ComPtr<ID3D12RootSignature> RootSignature;
+    ComPtr<ID3D12PipelineState> PipelineStateSRGB;
     ComPtr<ID3D12PipelineState> PipelineState;
 
     MipGenerationPass(RenderDevice const&);

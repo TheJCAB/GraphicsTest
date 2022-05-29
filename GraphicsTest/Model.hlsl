@@ -53,7 +53,7 @@ uint VisibilityAlphaTestPS(AlphaTestVertexOutput data, uint triangleId : SV_Prim
     uint materialIndex    = triangleParams[modelIndex][triangleId]     .MaterialIndex;
     uint diffuseTextureId = materials     [materialIndex]              .DiffuseTextureId;
 
-    clip(textures[diffuseTextureId - 1].Sample(defaultSampler, data.Uv).a - 0.5f);
+    clip(textures[diffuseTextureId - 1].Sample(wrapSampler, data.Uv).a - 0.5f);
 
     return triangleId | (instanceId << 20);
 }
