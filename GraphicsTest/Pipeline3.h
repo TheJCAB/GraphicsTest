@@ -54,12 +54,10 @@ struct RenderPipelineAssets
     struct MsaaSample
     {
         uint32_t Visibility; // 32 bits instance + tri
-        uint32_t SampleMask; // UNORM  4 * 5 = 20 bits compressed
+        uint32_t SampleMask; // 32 samples in a quad
     };
     ComPtr<ID3D12Resource> MsaaSampleBuffer;
     UINT                   MsaaSampleBufferUav;
-    ComPtr<ID3D12Resource> MsaaSampleCountBuffer;
-    UINT                   MsaaSampleCountBufferUav;
 
     IntermediateRenderTarget ColorBuffer;
     UINT                     ColorBufferUav = 0;

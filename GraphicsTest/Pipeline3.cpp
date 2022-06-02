@@ -30,18 +30,6 @@ RenderPipelineAssets::RenderPipelineAssets(RenderDevice& renderDevice)
         }
     );
 
-    MsaaSampleCountBuffer = CreateGpuBuffer(renderDevice.device, (renderDevice.Width * renderDevice.Height / 4) * sizeof(uint32_t));
-    MsaaSampleCountBufferUav = renderDevice.AllocateUavDescriptor(MsaaSampleCountBuffer,
-        {
-            .Format        = DXGI_FORMAT_UNKNOWN,
-            .ViewDimension = D3D12_UAV_DIMENSION_BUFFER,
-            .Buffer{
-                .NumElements = renderDevice.Width * renderDevice.Height / 4,
-                .StructureByteStride = sizeof(uint32_t),
-            },
-        }
-    );
-
     ColorBuffer = CreateIntermediateRenderTarget(renderDevice, renderDevice.Width, renderDevice.Height, DXGI_FORMAT_R16G16B16A16_UNORM, {}, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
     ColorBufferUav = renderDevice.AllocateUavDescriptor(ColorBuffer.Resource,
         {
@@ -63,7 +51,7 @@ MsaaGatherPass::MsaaGatherPass(RenderDevice& renderDevice)
         Root::Cbv<  D3D12_SHADER_VISIBILITY_ALL,                0,                        0 >,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, 1,                     0>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<2, 1,                     0>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<2, 2,                     0>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<2, 1,                     0>>,
         Root::Flags<D3D12_ROOT_SIGNATURE_FLAG_NONE>
     >();
 
@@ -91,7 +79,6 @@ void MsaaGatherPass::Render(RenderDevice const& renderDevice, SceneGraphAssets c
 
     renderDevice.commandList->Dispatch((renderDevice.Width + 7) / 8, (renderDevice.Height + 7) / 8, 1);
 
-    UavBarrier(renderDevice.commandList, assets.MsaaSampleCountBuffer);
     UavBarrier(renderDevice.commandList, assets.MsaaSampleBuffer);
 }
 
@@ -106,7 +93,7 @@ ColorPass::ColorPass(RenderDevice& renderDevice)
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, 1,                        0>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<2, 1,                        0>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<0, 1,                        0>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<2, 2,                        0>>,
+        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<2, 1,                        0>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS   , 1>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS   , 2>>,
         Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS   , 3>>,

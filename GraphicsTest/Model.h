@@ -1,5 +1,3 @@
-// GraphicsTest.cpp : Defines the entry point for the application.
-//
 #pragma once
 
 #if HLSL
@@ -127,8 +125,9 @@ struct TextureManager
     UINT                              FirstSrv = 0;
 
     TextureManager(RenderDevice&);
-    Texture::Id AllocateNewTexture(RenderDevice&, AssetUploader&, std::string_view pathName, DXGI_FORMAT = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
-    Texture::Id AllocateNewHdrMap (RenderDevice&, AssetUploader&, std::string_view pathName);
+    Texture::Id AllocateNewTexture         (RenderDevice&, AssetUploader&, std::string_view pathName, DXGI_FORMAT = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
+    Texture::Id AllocateNewElevationTexture(RenderDevice&, AssetUploader&, std::string_view pathName, DXGI_FORMAT = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
+    Texture::Id AllocateNewHdrMap          (RenderDevice&, AssetUploader&, std::string_view pathName);
 
     UINT GetTexturesDescriptorTable() const { return FirstSrv; }
 
@@ -158,6 +157,7 @@ struct Material
     std::string DiffuseTexturePathName;
     std::string BumpTexturePathName;
     std::string SpecularTexturePathName;
+    bool        BumpTextureIsElevation;
 };
 
 struct MaterialManager

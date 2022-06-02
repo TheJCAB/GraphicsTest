@@ -94,10 +94,22 @@ std::map<std::string, ObjMaterial> LoadObjMaterials(std::filesystem::path filePa
             path.replace_filename(line.substr(line.find_first_not_of(" \t", 9)));
             material->BumpTexture = path;
         }
+        else if (line.starts_with("map_bump "))
+        {
+            auto path = filePath;
+            path.replace_filename(line.substr(line.find_first_not_of(" \t", 9)));
+            material->ElevationTexture = path;
+        }
         else if (line.starts_with("map_Spec "))
         {
             auto path = filePath;
             path.replace_filename(line.substr(line.find_first_not_of(" \t", 9)));
+            material->SpecularTexture = path;
+        }
+        else if (line.starts_with("map_Ks "))
+        {
+            auto path = filePath;
+            path.replace_filename(line.substr(line.find_first_not_of(" \t", 7)));
             material->SpecularTexture = path;
         }
     }
@@ -464,8 +476,9 @@ std::vector<Model> UploadObjModel(ObjModel const& model, TextureManager& texture
                     .SpecularColor           = objMaterial.SpecularColor,
                     .SpecularExponent        = objMaterial.SpecularExponent,
                     .DiffuseTexturePathName  = objMaterial.DiffuseTexture.value_or("").string(),
-                    .BumpTexturePathName     = objMaterial.BumpTexture.value_or("").string(),
+                    .BumpTexturePathName     = objMaterial.BumpTexture.value_or(objMaterial.ElevationTexture.value_or("")).string(),
                     .SpecularTexturePathName = objMaterial.SpecularTexture.value_or("").string(),
+                    .BumpTextureIsElevation  = objMaterial.ElevationTexture.has_value(),
                 }
             );
         }

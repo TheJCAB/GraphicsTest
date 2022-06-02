@@ -1,5 +1,6 @@
 
 #include "Pipeline.h"
+#include "Lighting.h"
 
 ConstantBuffer<SceneConstants> sceneConstants : register(b0);
 
@@ -50,11 +51,20 @@ float3 ScreenPosToViewPos(float2 sPos, float viewPosZ)
     return float3((sPos * sceneConstants.ViewSpace.InverseProjectionScale + sceneConstants.ViewSpace.InverseProjectionBias) * viewPosZ, viewPosZ);
 }
 
+float2 GetSamplePos(uint2 pos, int s)
+{
+    return GetVisibilityPos(pos, s) + 0.5 + visibilityMap.GetSamplePosition(GetVisibilitySample(s));
+}
+
+float3 GetSampleViewPos(uint2 pos, int s, float depth)
+{
+    float2 spos = GetSamplePos(pos, s);
+    return ScreenPosToViewPos(spos, depth);
+}
+
 float3 GetSampleViewPos(uint2 pos, int s)
 {
-    float depth = -0.0001f / GetDepth(pos, s);
-    float2 spos = GetVisibilityPos(pos, s) + 0.5 + visibilityMap.GetSamplePosition(GetVisibilitySample(s));
-    return ScreenPosToViewPos(spos, depth);
+    return GetSampleViewPos(pos, s, -0.0001f / GetDepth(pos, s));
 }
 
 uint NumQuadsX() { return sceneConstants.ViewSpace.Size.x                                   / PSamplesX; }
@@ -68,7 +78,6 @@ struct MsaaSample
 };
 
 RWStructuredBuffer<MsaaSample> msaaBuffer : register(u2, space0);
-RWStructuredBuffer<uint> msaaSampleCountBuffer : register(u3, space0);
 
 groupshared uint2 visibilityListGS[8][8][8];
 
@@ -117,11 +126,14 @@ uint2 BringTopSampleToFront(uint2 tid, inout uint numSamples, bool overwriteFirs
 // Updates numSamples and topSample.
 void MergeSamplesAndSync(inout uint numSamples, inout uint2 topSample, uint2 tid, uint2 otherTid, bool thisIsFirstSample)
 {
+    // Figure out what we're going to do with the top samples from this pixel and the other pixel.
+
     bool removeSample = false;
     bool mergeRemove  = false;
 
     uint2 otherSample = visibilityListGS[otherTid.x][otherTid.y][0];
-    if (otherSample.x == topSample.x)
+    bool topsMatch = otherSample.x == topSample.x;
+    if (topsMatch)
     {
         uint2 firstTid  = thisIsFirstSample ? tid : otherTid;
         uint2 secondTid = thisIsFirstSample ? otherTid : tid;
@@ -129,69 +141,75 @@ void MergeSamplesAndSync(inout uint numSamples, inout uint2 topSample, uint2 tid
         uint2 firstSample  = thisIsFirstSample ? topSample : otherSample;
         uint2 secondSample = thisIsFirstSample ? otherSample : topSample;
 
-        if (visibilityListGS[firstTid.x][firstTid.y][1].x != 0 && countbits(secondSample.y) > countbits(firstSample.y))
+        if (visibilityListGS[firstTid.x][firstTid.y][1].x != 0 && countbits(secondSample.y) >= countbits(firstSample.y))
         {
-            // Merge to the second
+            // First has another sample and second has more samples, so merge first into second.
             removeSample =  thisIsFirstSample;
             mergeRemove  = true;
         }
-        else if (visibilityListGS[secondTid.x][secondTid.y][1].x != 0 && countbits(secondSample.y) < countbits(firstSample.y))
+        else if (visibilityListGS[secondTid.x][secondTid.y][1].x != 0 && countbits(secondSample.y) <= countbits(firstSample.y))
         {
-            // Merge to the first
+            // Second has another sample and first has more samples, so merge second into first.
             removeSample = !thisIsFirstSample;
             mergeRemove  = true;
         }
-    }
 
-    AllMemoryBarrierWithGroupSync();
+        GroupMemoryBarrierWithGroupSync();
 
-    if (mergeRemove)
-    {
-        if (removeSample)
+        // Both top samples were the same triangle, so either we merge them or we leave them alone.
+
+        if (mergeRemove)
         {
-            topSample = BringTopSampleToFront(tid, numSamples, true);
-        }
-        else
-        {
-            topSample.y |= otherSample.y;
-            visibilityListGS[tid.x][tid.y][0].y = topSample.y;
+            // Merge the samples.
+            if (removeSample)
+            {
+                // This sample merged into the other, so it's now gone.
+                // We need to find a next best one.
+                // Note that we're guaranteed to have at least another sample by the checks above.
+                topSample = BringTopSampleToFront(tid, numSamples, true);
+            }
+            else
+            {
+                // The other sample merged into this one. We won!
+                topSample.y |= otherSample.y;
+                visibilityListGS[tid.x][tid.y][0].y = topSample.y;
+            }
         }
     }
     else
     {
-        uint otherRemoved = 8;
-        for (int i = 1; i < 8; ++i)
+        for (int i = 1; i < numSamples; ++i)
         {
-            otherSample = visibilityListGS[otherTid.x][otherTid.y][i];
-            if (otherSample.x == topSample.x)
+            uint2 curSample = visibilityListGS[tid.x][tid.y][i];
+            if (curSample.x == otherSample.x)
             {
-                topSample.y |= otherSample.y;
-                visibilityListGS[tid.x][tid.y][0].y = topSample.y;
-                otherRemoved = i;
-            }
-            else if (otherSample.x == 0)
-            {
-                if (otherRemoved < i - 1)
+                // Note: here we modify the other pixel's top sample, and the current pixel's tail of samples.
+                // The other pixel's thread will do the same, so we'll need to reacquire
+                // the potentially updated topSample.y below, after the barrier.
+                otherSample.y |= curSample.y;
+                visibilityListGS[otherTid.x][otherTid.y][0].y = otherSample.y;
+                if (i + 1 < numSamples)
                 {
-                    visibilityListGS[otherTid.x][otherTid.y][otherRemoved] = visibilityListGS[otherTid.x][otherTid.y][i - 1];
-                    visibilityListGS[otherTid.x][otherTid.y][i - 1] = 0;
+                    // We've given our "i" sample to the other thread, so replace it with our last sample.
+                    visibilityListGS[tid.x][tid.y][i] = visibilityListGS[tid.x][tid.y][numSamples - 1];
+                    visibilityListGS[tid.x][tid.y][numSamples - 1] = 0;
                 }
+                else
+                {
+                    // We've given our last sample to the other thread, so just neuter it.
+                    visibilityListGS[tid.x][tid.y][i] = 0;
+                }
+                --numSamples;
                 break;
             }
         }
     }
 
-    AllMemoryBarrierWithGroupSync();
+    GroupMemoryBarrierWithGroupSync();
 
-    if (!mergeRemove)
-    {
-        if (visibilityListGS[tid.x][tid.y][numSamples - 1].x == 0)
-        {
-            --numSamples;
-        }
-    }
+    // The other thread might have merged some samples into our top, so refresh it.
+    topSample.y = visibilityListGS[tid.x][tid.y][0].y;
 
-    AllMemoryBarrierWithGroupSync();
 }
 
 [numthreads(8, 8, 1)]
@@ -207,6 +225,7 @@ void MsaaGatherPass(uint3 pos : SV_DispatchThreadID, uint3 tid : SV_GroupThreadI
     uint numSamples = 0;
     {
         uint sampleBit = 1u << maskBit;
+        [unroll]
         for (uint s = 0; s != 8; ++s, sampleBit <<= 1)
         {
             uint v = visibilityMap.sample[s][pos.xy];
@@ -235,24 +254,26 @@ void MsaaGatherPass(uint3 pos : SV_DispatchThreadID, uint3 tid : SV_GroupThreadI
     // Pick the top sample.
     uint2 topSample = BringTopSampleToFront(tid.xy, numSamples);
 
-    AllMemoryBarrierWithGroupSync();
+    GroupMemoryBarrierWithGroupSync();
 
+    // Do a cooperative merge of this pixel and another one in the same quad.
+    // We do this three times: along the X coordinate, then along the Y coordinate, and lastly along the diagonals.
+    // The idea is that each pixel in the quad will end up owning all the samples
+    // for each of the 4 most populated triangles across the quad, if there are 4 triangles or more.
+    // Each pixel in general will end up with a mask covering any samples across the entire quad.
+    // If there are less than 4 triangles across the quad, then multiple pixels will split the sample mask,
+    // keeping the shading and texturing resolution constant.
     MergeSamplesAndSync(numSamples, topSample, tid.xy, tid.xy ^ uint2(1, 0), (tid.x & 1) == 0);
     MergeSamplesAndSync(numSamples, topSample, tid.xy, tid.xy ^ uint2(0, 1), (tid.y & 1) == 0);
     MergeSamplesAndSync(numSamples, topSample, tid.xy, tid.xy ^ uint2(1, 1), (tid.x & 1) == 0);
 
-    uint quadIndex = qpos.x + qpos.y * NumQuadsX();
+    uint quadIndex = 4 * (qpos.x + qpos.y * NumQuadsX());
     uint pIndex = qid.x + qid.y * 2;
-
-    if (qid.x + qid.y == 0)
-    {
-        msaaSampleCountBuffer[quadIndex] = 4;
-    }
 
     MsaaSample result;
     result.Visibility = topSample.x;
     result.SampleMask = topSample.y;
-    msaaBuffer[pIndex * NumQuads() + quadIndex] = result;
+    msaaBuffer[pIndex + quadIndex] = result;
 }
 
 float3 CalculateViewPosForQuad(uint2 quadPos, uint sampleMask)
@@ -260,13 +281,12 @@ float3 CalculateViewPosForQuad(uint2 quadPos, uint sampleMask)
     float3 viewPos = float3(0, 0, 0);
     uint s = 0;
     float posWeight = 0;
+    [unroll(8)]
     while (sampleMask != 0)
     {
-        while ((sampleMask & 1) == 0)
-        {
-            ++s;
-            sampleMask >>= 1;
-        }
+        uint skipSamples = firstbitlow(sampleMask);
+        s += skipSamples;
+        sampleMask >>= skipSamples;
 
         uint2 samplePixel = GetSamplePixel(s);
         viewPos += GetSampleViewPos(quadPos, s);
@@ -276,6 +296,27 @@ float3 CalculateViewPosForQuad(uint2 quadPos, uint sampleMask)
     }
 
     return viewPos / posWeight;
+}
+
+float3 CalculateViewDirForQuad(uint2 quadPos, uint sampleMask)
+{
+    float2 viewDir = float2(0, 0);
+    uint s = 0;
+    float posWeight = 0;
+    [unroll(8)]
+    while (sampleMask != 0)
+    {
+        uint skipSamples = firstbitlow(sampleMask);
+        s += skipSamples;
+        sampleMask >>= skipSamples;
+
+        viewDir += GetSamplePos(quadPos, s);
+        posWeight += 1;
+        ++s;
+        sampleMask >>= 1;
+    }
+
+    return normalize(ScreenPosToViewPos(viewDir / posWeight, -1.0f));
 }
 
 float3 DecodeViewPos(uint pos, float depth)
@@ -300,73 +341,6 @@ uint4 DecodeWeights(uint mask)
     );
 }
 
-struct GBufferSample
-{
-    float3            ViewPos;
-    BarycentricCoords Barycentric;
-    float3            ViewNormal;
-    float3            DiffuseColor[4];
-};
-
-GBufferSample GetGBufferSample(uint visibility, float3 viewPos)
-{
-    GBufferSample result;
-
-    uint     tri         = visibility & 0xFFFFF;
-    uint     instanceId  = (visibility >> 20) - 1;
-    uint     modelIndex  = instanceList[instanceId].ModelIndex;
-    float4x4 modelToView = instanceList[instanceId].View;
-
-    uint3 i = indices[modelIndex].Load(tri);
-    uint materialIndex = triangleParams[modelIndex][tri].MaterialIndex;
-    result.DiffuseColor[0] =
-    result.DiffuseColor[1] =
-    result.DiffuseColor[2] =
-    result.DiffuseColor[3] = materials[materialIndex].DiffuseColor;
-    uint diffuseTextureId = materials[materialIndex].DiffuseTextureId;
-    //float3 AmbientColor;
-    //float3 DiffuseColor;
-    //float3 SpecularColor;
-    //float  SpecularExponent;
-    //uint   DiffuseTextureId;
-
-
-    result.Barycentric = GetBarycentric(sceneConstants.ViewSpace, vertexPositions[modelIndex], i, modelToView, viewPos);
-
-    float3 normal0 = vertexAttributes[modelIndex][i[0]].Normal;
-    float3 normal1 = vertexAttributes[modelIndex][i[1]].Normal;
-    float3 normal2 = vertexAttributes[modelIndex][i[2]].Normal;
-
-    result.ViewPos    = viewPos;
-    result.ViewNormal = normalize(mul(normalize(normal0 * result.Barycentric.B[0] + normal1 * result.Barycentric.B[1] + normal2 * result.Barycentric.B[2]), (float3x3)modelToView));
-
-    if (diffuseTextureId != 0)
-    {
-        float2 uv0 = vertexAttributes[modelIndex][i[0]].UV;
-        float2 uv1 = vertexAttributes[modelIndex][i[1]].UV;
-        float2 uv2 = vertexAttributes[modelIndex][i[2]].UV;
-        float2 uv =
-            uv0 * result.Barycentric.B[0] +
-            uv1 * result.Barycentric.B[1] +
-            uv2 * result.Barycentric.B[2];
-        float2 ddx =
-            uv0 * result.Barycentric.dB_dx[0] +
-            uv1 * result.Barycentric.dB_dx[1] +
-            uv2 * result.Barycentric.dB_dx[2];
-        float2 ddy =
-            uv0 * result.Barycentric.dB_dy[0] +
-            uv1 * result.Barycentric.dB_dy[1] +
-            uv2 * result.Barycentric.dB_dy[2];
-
-        result.DiffuseColor[0] = textures[diffuseTextureId - 1].SampleGrad(wrapSampler, uv - ddx * 0.5f - ddy * 0.5f, ddx, ddy).rgb;
-        result.DiffuseColor[1] = textures[diffuseTextureId - 1].SampleGrad(wrapSampler, uv + ddx * 0.5f - ddy * 0.5f, ddx, ddy).rgb;
-        result.DiffuseColor[2] = textures[diffuseTextureId - 1].SampleGrad(wrapSampler, uv - ddx * 0.5f + ddy * 0.5f, ddx, ddy).rgb;
-        result.DiffuseColor[3] = textures[diffuseTextureId - 1].SampleGrad(wrapSampler, uv + ddx * 0.5f + ddy * 0.5f, ddx, ddy).rgb;
-    }
-
-    return result;
-}
-
     //uint color = triangleParams[tri].Color;
     //return float4(
     //    ( color        & 0xFF) / 255.0f,
@@ -375,70 +349,53 @@ GBufferSample GetGBufferSample(uint visibility, float3 viewPos)
     //    ((color >> 24) & 0xFF) / 255.0f);
 
 
-float4 LinearToGamma(float4 color)
-{
-    return float4(pow(color.xyz, 1.0f / 2.2f), color.w);
-}
-
-groupshared float4 AccumColors[8][8][4];
+groupshared float4 AccumColors[8][8];
 
 [numthreads(8, 8, 1)]
 void ColorPass(uint3 pos : SV_DispatchThreadID, uint3 tid : SV_GroupThreadId)
 {
+    // Consider this for thread locality:
+    // const uint2 gSize = sceneConstants.ViewSpace.Size / 8;
+    // uint gindex = (pos.x / 8) + (pos.y / 8) * gSize.x;
+    // uint2 gid = uint2(gindex % 8 + 8 * ((gindex / 8) / gSize.y), (gindex / 8) % gSize.y);
+    // pos.xy = gid * 8 + tid.xy;
+
     const uint2 qpos = pos.xy >> 1;
     const uint2 qid  = pos.xy & 1;
 
-    const uint thisMask = 0xFFu << (qid.x * 8 + qid.y * 16);
-
-    uint quadIndex = qpos.x + qpos.y * NumQuadsX();
+    uint quadIndex = 4 * (qpos.x + qpos.y * NumQuadsX());
     uint pIndex = qid.x + qid.y * 2;
 
-    MsaaSample msample = msaaBuffer[pIndex * NumQuads() + quadIndex];
-    float4 weights = (float4)DecodeWeights(msample.SampleMask) + 0.01f;
-    uint v = msample.Visibility;
-    if (v == 0)
+    float4 color = 0;
+
+    MsaaSample msample = msaaBuffer[pIndex + quadIndex];
+    if (msample.Visibility == 0)
     {
-        AccumColors[tid.x][tid.y][0] = weights[0] * float4(0.1, 0, 0, 1);
-        AccumColors[tid.x][tid.y][1] = weights[1] * float4(0.1, 0, 0, 1);
-        AccumColors[tid.x][tid.y][2] = weights[2] * float4(0.1, 0, 0, 1);
-        AccumColors[tid.x][tid.y][3] = weights[3] * float4(0.1, 0, 0, 1);
+        float3 viewDir = CalculateViewDirForQuad(qpos.xy, msample.SampleMask);
+        float3 skyMapColor = SampleSkymap(sceneConstants.ViewSpace, textures[0], viewDir).xyz;
+
+        color = float4(skyMapColor, 1.0f);
     }
     else
     {
         float3 viewPos = CalculateViewPosForQuad(qpos.xy, msample.SampleMask);
+        GBufferSample gSample = GetGBufferSample(sceneConstants.ViewSpace, msample.Visibility, viewPos);
 
-        GBufferSample gSample = GetGBufferSample(v, viewPos);
+        float3 lightedColor = LightPixel(sceneConstants.ViewSpace, gSample);
 
-        float3 albedo0 = gSample.DiffuseColor[0];
-        float3 albedo1 = gSample.DiffuseColor[1];
-        float3 albedo2 = gSample.DiffuseColor[2];
-        float3 albedo3 = gSample.DiffuseColor[3];
-
-        //albedo0.y *= totalWeights[0] / 8.0f;
-        //albedo1.y *= totalWeights[1] / 8.0f;
-        //albedo2.y *= totalWeights[2] / 8.0f;
-        //albedo3.y *= totalWeights[3] / 8.0f;
-
-        //albedo0 *= gSample.Barycentric * weights[0] / totalWeights[0];
-        //albedo1 *= gSample.Barycentric * weights[1] / totalWeights[1];
-        //albedo2 *= gSample.Barycentric * weights[2] / totalWeights[2];
-        //albedo3 *= gSample.Barycentric * weights[3] / totalWeights[3];
-
-        float3 finalColor = albedo0 * dot(gSample.ViewNormal, normalize(float3(1, 1, 1)));
-
-        AccumColors[tid.x][tid.y][0] = weights[0] * float4(finalColor, 1);
-        AccumColors[tid.x][tid.y][1] = weights[1] * float4(finalColor, 1);
-        AccumColors[tid.x][tid.y][2] = weights[2] * float4(finalColor, 1);
-        AccumColors[tid.x][tid.y][3] = weights[3] * float4(finalColor, 1);
+        color = float4(lightedColor, 1.0f);
     }
 
-    AllMemoryBarrierWithGroupSync();
+    AccumColors[tid.x][tid.y] = color;
 
-    float4 color =
-        AccumColors[tid.x    ][tid.y    ][pIndex] +
-        AccumColors[tid.x ^ 1][tid.y    ][pIndex] +
-        AccumColors[tid.x    ][tid.y ^ 1][pIndex] +
-        AccumColors[tid.x ^ 1][tid.y ^ 1][pIndex];
+    uint maskBits = 0xFFu << (pIndex * 8);
+    color *= countbits(msample.SampleMask & maskBits);
+
+    GroupMemoryBarrierWithGroupSync();
+
+    color += AccumColors[tid.x ^ 1u][tid.y     ] * countbits(msaaBuffer[(pIndex ^ 1) + quadIndex].SampleMask & maskBits);
+    color += AccumColors[tid.x     ][tid.y ^ 1u] * countbits(msaaBuffer[(pIndex ^ 2) + quadIndex].SampleMask & maskBits);
+    color += AccumColors[tid.x ^ 1u][tid.y ^ 1u] * countbits(msaaBuffer[(pIndex ^ 3) + quadIndex].SampleMask & maskBits);
 
     uint2 spos = pos.xy;
     float4 posColor = 1;//float4(spos.x == pos.x ? 1.0f: 0.5f, 1.0f, spos.y == pos.y ? 1.0f: 0.5f, 1.0f);
@@ -495,39 +452,5 @@ float4 ResolvePS(float4 position : SV_Position) : SV_Target
 
     float4 pixelColor = colorMap[pos];
 
-    //if (msaaSampleCountBuffer[computableIndex] == 1)
-    //{
-    //    uint visibility = msaaBuffer[computableIndex].Visibility;
-    //    float4 mixedColor = pixelColor;
-    //    if (msaaSampleCountBuffer[computableIndexX] == 1)
-    //    {
-    //        if (visibility == msaaBuffer[computableIndexX].Visibility)
-    //        {
-    //            float4 oppositeColorX = colorMap[pos ^ uint2(1, 0)];
-    //            float4 neighborColorX = colorMap[posNeighborX];
-    //            mixedColor += (oppositeColorX + neighborColorX - 2.0f * pixelColor) / 3.0f;
-    //        }
-    //    }
-    //    if (msaaSampleCountBuffer[computableIndexY] == 1)
-    //    {
-    //        if (visibility == msaaBuffer[computableIndexY].Visibility)
-    //        {
-    //            float4 oppositeColorY = colorMap[pos ^ uint2(0, 1)];
-    //            float4 neighborColorY = colorMap[posNeighborY];
-    //            mixedColor += (oppositeColorY + neighborColorY - 2.0f * pixelColor) / 3.0f;
-    //        }
-    //    }
-    //    pixelColor = clamp(mixedColor, 0, 1);
-    //}
-
-    return //LinearToGamma(
-        pixelColor;
-        /*
-        * 0.4f +
-        colorMap[floor(position.xy) + uint2(-1, 0)] * 0.15f +
-        colorMap[floor(position.xy) + uint2( 1, 0)] * 0.15f +
-        colorMap[floor(position.xy) + uint2(0, -1)] * 0.15f +
-        colorMap[floor(position.xy) + uint2(0,  1)] * 0.15f
-        */
-    //);
+    return pixelColor;
 }

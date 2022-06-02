@@ -1,5 +1,6 @@
 
 #include "Pipeline.h"
+#include "Lighting.h"
 
 ConstantBuffer<SceneConstants> sceneConstants : register(b0);
 
@@ -50,11 +51,20 @@ float3 ScreenPosToViewPos(float2 sPos, float viewPosZ)
     return float3((sPos * sceneConstants.ViewSpace.InverseProjectionScale + sceneConstants.ViewSpace.InverseProjectionBias) * viewPosZ, viewPosZ);
 }
 
+float2 GetSamplePos(uint2 pos, int s)
+{
+    return GetVisibilityPos(pos, s) + 0.5 + visibilityMap.GetSamplePosition(GetVisibilitySample(s));
+}
+
+float3 GetSampleViewPos(uint2 pos, int s, float depth)
+{
+    float2 spos = GetSamplePos(pos, s);
+    return ScreenPosToViewPos(spos, depth);
+}
+
 float3 GetSampleViewPos(uint2 pos, int s)
 {
-    float depth = -0.0001f / GetDepth(pos, s);
-    float2 spos = GetVisibilityPos(pos, s) + 0.5 + visibilityMap.GetSamplePosition(GetVisibilitySample(s));
-    return ScreenPosToViewPos(spos, depth);
+    return GetSampleViewPos(pos, s, -0.0001f / GetDepth(pos, s));
 }
 
 uint NumQuadsX() { return sceneConstants.ViewSpace.Size.x                                   / PSamplesX; }
@@ -178,7 +188,6 @@ float3 CalculateViewPosForQuad(uint2 quadPos, uint sampleMask)
             sampleMask >>= 1;
         }
 
-        uint2 samplePixel = GetSamplePixel(s);
         viewPos += GetSampleViewPos(quadPos, s);
         posWeight += 1;
         ++s;
@@ -188,16 +197,26 @@ float3 CalculateViewPosForQuad(uint2 quadPos, uint sampleMask)
     return viewPos / posWeight;
 }
 
-float3 DecodeViewPos(uint pos, float depth)
+float3 CalculateViewDirForQuad(uint2 quadPos, uint sampleMask)
 {
-    float2 spos = ((float2)(uint2(pos, pos >> 16) & 0xFFFF) / 65535.5f) * sceneConstants.InverseNormalizedProjectionScale + sceneConstants.InverseNormalizedProjectionBias;
-    return float3(spos * depth, depth);
-}
+    float2 viewDir = float2(0, 0);
+    uint s = 0;
+    float posWeight = 0;
+    while (sampleMask != 0)
+    {
+        while ((sampleMask & 1) == 0)
+        {
+            ++s;
+            sampleMask >>= 1;
+        }
 
-uint2 DecodeGroupPos(uint pos)
-{
-    uint2 npos = uint2(pos, pos >> 16) & 0xFFFF;
-    return npos * uint2(640, 360) / 0x10000;
+        viewDir += GetSamplePos(quadPos, s);
+        posWeight += 1;
+        ++s;
+        sampleMask >>= 1;
+    }
+
+    return normalize(ScreenPosToViewPos(viewDir / posWeight, -1.0f));
 }
 
 uint4 DecodeWeights(uint mask)
@@ -208,86 +227,6 @@ uint4 DecodeWeights(uint mask)
         countbits(mask & 0xFF0000),
         countbits(mask & 0xFF000000)
     );
-}
-
-struct GBufferSample
-{
-    float3            ViewPos;
-    BarycentricCoords Barycentric;
-    float3            ViewNormal;
-    float3            DiffuseColor[4];
-};
-
-GBufferSample GetGBufferSample(uint visibility, float3 viewPos)
-{
-    GBufferSample result;
-
-    uint     tri         = visibility & 0xFFFFF;
-    uint     instanceId  = (visibility >> 20) - 1;
-    uint     modelIndex  = instanceList[instanceId].ModelIndex;
-    float4x4 modelToView = instanceList[instanceId].View;
-
-    uint3 i = indices[modelIndex].Load(tri);
-    uint materialIndex = triangleParams[modelIndex][tri].MaterialIndex;
-    result.DiffuseColor[0] =
-    result.DiffuseColor[1] =
-    result.DiffuseColor[2] =
-    result.DiffuseColor[3] = materials[materialIndex].DiffuseColor;
-    uint diffuseTextureId = materials[materialIndex].DiffuseTextureId;
-    //float3 AmbientColor;
-    //float3 DiffuseColor;
-    //float3 SpecularColor;
-    //float  SpecularExponent;
-    //uint   DiffuseTextureId;
-
-
-    result.Barycentric = GetBarycentric(sceneConstants.ViewSpace, vertexPositions[modelIndex], i, modelToView, viewPos);
-
-    float3 normal0 = vertexAttributes[modelIndex][i[0]].Normal;
-    float3 normal1 = vertexAttributes[modelIndex][i[1]].Normal;
-    float3 normal2 = vertexAttributes[modelIndex][i[2]].Normal;
-
-    result.ViewPos    = viewPos;
-    result.ViewNormal = normalize(mul(normalize(normal0 * result.Barycentric.B[0] + normal1 * result.Barycentric.B[1] + normal2 * result.Barycentric.B[2]), (float3x3)modelToView));
-
-    if (diffuseTextureId != 0)
-    {
-        float2 uv0 = vertexAttributes[modelIndex][i[0]].UV;
-        float2 uv1 = vertexAttributes[modelIndex][i[1]].UV;
-        float2 uv2 = vertexAttributes[modelIndex][i[2]].UV;
-        float2 uv =
-            uv0 * result.Barycentric.B[0] +
-            uv1 * result.Barycentric.B[1] +
-            uv2 * result.Barycentric.B[2];
-        float2 ddx =
-            uv0 * result.Barycentric.dB_dx[0] +
-            uv1 * result.Barycentric.dB_dx[1] +
-            uv2 * result.Barycentric.dB_dx[2];
-        float2 ddy =
-            uv0 * result.Barycentric.dB_dy[0] +
-            uv1 * result.Barycentric.dB_dy[1] +
-            uv2 * result.Barycentric.dB_dy[2];
-
-        result.DiffuseColor[0] = textures[diffuseTextureId - 1].SampleGrad(wrapSampler, uv - ddx * 0.5f - ddy * 0.5f, ddx, ddy).rgb;
-        result.DiffuseColor[1] = textures[diffuseTextureId - 1].SampleGrad(wrapSampler, uv + ddx * 0.5f - ddy * 0.5f, ddx, ddy).rgb;
-        result.DiffuseColor[2] = textures[diffuseTextureId - 1].SampleGrad(wrapSampler, uv - ddx * 0.5f + ddy * 0.5f, ddx, ddy).rgb;
-        result.DiffuseColor[3] = textures[diffuseTextureId - 1].SampleGrad(wrapSampler, uv + ddx * 0.5f + ddy * 0.5f, ddx, ddy).rgb;
-    }
-
-    return result;
-}
-
-    //uint color = triangleParams[tri].Color;
-    //return float4(
-    //    ( color        & 0xFF) / 255.0f,
-    //    ((color >>  8) & 0xFF) / 255.0f,
-    //    ((color >> 16) & 0xFF) / 255.0f,
-    //    ((color >> 24) & 0xFF) / 255.0f);
-
-
-float4 LinearToGamma(float4 color)
-{
-    return float4(pow(color.xyz, 1.0f / 2.2f), color.w);
 }
 
 [numthreads(64 / PSamplesX, 16 / PSamplesY, 1)]
@@ -314,36 +253,25 @@ void ColorPass(uint3 pos : SV_DispatchThreadID)
             uint v = msample.Visibility;
             if (v == 0)
             {
-                color[0] += weights[0] * float4(0.1, 0, 0, 1);
-                color[1] += weights[1] * float4(0.1, 0, 0, 1);
-                color[2] += weights[2] * float4(0.1, 0, 0, 1);
-                color[3] += weights[3] * float4(0.1, 0, 0, 1);
+                float3 viewDir = CalculateViewDirForQuad(pos.xy, msample.SampleMask);
+                float3 skyMapColor = SampleSkymap(sceneConstants.ViewSpace, textures[0], viewDir).xyz;
+
+                color[0] += weights[0] * float4(skyMapColor, 1);
+                color[1] += weights[1] * float4(skyMapColor, 1);
+                color[2] += weights[2] * float4(skyMapColor, 1);
+                color[3] += weights[3] * float4(skyMapColor, 1);
             }
             else
             {
                 float3 viewPos = CalculateViewPosForQuad(pos.xy, msample.SampleMask);
+                GBufferSample gSample = GetGBufferSample(sceneConstants.ViewSpace, v, viewPos);
 
-                GBufferSample gSample = GetGBufferSample(v, viewPos);
+                float3 lightedColor = LightPixel(sceneConstants.ViewSpace, gSample);
 
-                float3 albedo0 = gSample.DiffuseColor[0];
-                float3 albedo1 = gSample.DiffuseColor[1];
-                float3 albedo2 = gSample.DiffuseColor[2];
-                float3 albedo3 = gSample.DiffuseColor[3];
-
-                //albedo0.y *= totalWeights[0] / 8.0f;
-                //albedo1.y *= totalWeights[1] / 8.0f;
-                //albedo2.y *= totalWeights[2] / 8.0f;
-                //albedo3.y *= totalWeights[3] / 8.0f;
-
-                //albedo0 *= gSample.Barycentric * weights[0] / totalWeights[0];
-                //albedo1 *= gSample.Barycentric * weights[1] / totalWeights[1];
-                //albedo2 *= gSample.Barycentric * weights[2] / totalWeights[2];
-                //albedo3 *= gSample.Barycentric * weights[3] / totalWeights[3];
-
-                color[0] += weights[0] * float4(albedo0 * dot(gSample.ViewNormal, normalize(float3(1, 1, 1))), 1);
-                color[1] += weights[1] * float4(albedo1 * dot(gSample.ViewNormal, normalize(float3(1, 1, 1))), 1);
-                color[2] += weights[2] * float4(albedo2 * dot(gSample.ViewNormal, normalize(float3(1, 1, 1))), 1);
-                color[3] += weights[3] * float4(albedo3 * dot(gSample.ViewNormal, normalize(float3(1, 1, 1))), 1);
+                color[0] += weights[0] * float4(lightedColor, 1);
+                color[1] += weights[1] * float4(lightedColor, 1);
+                color[2] += weights[2] * float4(lightedColor, 1);
+                color[3] += weights[3] * float4(lightedColor, 1);
             }
         }
     }

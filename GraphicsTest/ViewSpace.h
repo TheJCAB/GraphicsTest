@@ -52,54 +52,22 @@ BarycentricCoords GetBarycentric(ViewSpaceConstants viewSpace, StructuredBuffer<
     float3 N = cross(viewPos1 - viewPos0, viewPos2 - viewPos0);
     float3 normalizedN = normalize(N);
 
-    // Normalized vectors in the triangle plane, along the screen axes.
-    float2 T_x = normalize(float2(N.z, -N.x));
-    float2 T_y = normalize(float2(N.z,  N.y));
-
-    // Back-project the viewPos deltas of the pixel deltas, along each axis, the Z plane of viewPos.
-    float dViewPosX_dx = viewSpace.InverseProjectionScale.x * viewPos.z;
-    float dViewPosY_dy = viewSpace.InverseProjectionScale.y * viewPos.z;
-
-    float viewPosDotN = dot(viewPos, N);
-    float dViewPosX_dx_Nx = dViewPosX_dx * N.x;
-    float dViewPosY_dy_Ny = dViewPosY_dy * N.y;
-
-    // viewPosDotN + dViewPos*N will be used as denominator below, so for numerical stability
-    // we choose between that and viewPosDotN - dViewPos*N, on each axis.
-    // We do that by inverting the deltas using sign multiplers, and then un-inverting later below the same way.
-    float signX = abs(viewPosDotN + dViewPosX_dx_Nx) > abs(viewPosDotN - dViewPosX_dx_Nx) ? 1.0f : -1.0f;
-    float signY = abs(viewPosDotN + dViewPosY_dy_Ny) > abs(viewPosDotN - dViewPosY_dy_Ny) ? 1.0f : -1.0f;
-
-    // We'll find the view positions, in the triangle, one pixel over on each axis, so we can calculate derivatives.
-    float3 zViewPos_dx = viewPos;
-    float3 zViewPos_dy = viewPos;
-
-    // Add the back-projection of the pixel deltas, into the Z plane of viewPos.
-    zViewPos_dx.x += dViewPosX_dx * signX;
-    zViewPos_dy.y += dViewPosY_dy * signY;
-
-    // Adjust for the triangle's orientation, by pushing/pulling the Z-plane view positions into the triangle's plane.
-    float3 viewPos_dx = zViewPos_dx * viewPosDotN / (viewPosDotN + dViewPosX_dx_Nx * signX);
-    float3 viewPos_dy = zViewPos_dy * viewPosDotN / (viewPosDotN + dViewPosY_dy_Ny * signY);
-
     BarycentricCoords result;
 
     float3 N_N2 = N / dot(N, N);
 
-    result.dViewPos_dx = viewSpace.InverseProjectionScale.x * viewPos.z * (float3(1.0f, 0.0f, 0.0f) - normalizedN.x * viewPos / max(dot(viewPos, normalizedN), 0.00001f));
-    result.dViewPos_dy = viewSpace.InverseProjectionScale.y * viewPos.z * (float3(0.0f, 1.0f, 0.0f) - normalizedN.y * viewPos / max(dot(viewPos, normalizedN), 0.00001f));
+    result.dViewPos_dx = viewSpace.InverseProjectionScale.x * viewPos.z * (float3(1.0f, 0.0f, 0.0f) - normalizedN.x * viewPos / max(dot(viewPos, normalizedN), 1e-20f));
+    result.dViewPos_dy = viewSpace.InverseProjectionScale.y * viewPos.z * (float3(0.0f, 1.0f, 0.0f) - normalizedN.y * viewPos / max(dot(viewPos, normalizedN), 1e-20f));
 
-    //result.dViewPos_dx = viewSpace.InverseProjectionScale.x * viewPos.z * float3(T_x.x, 0.0f, T_x.y);
-    //result.dViewPos_dy = viewSpace.InverseProjectionScale.y * viewPos.z * float3(0.0f, T_y.x, T_y.y);
+    float3 viewPos_dx = viewPos + result.dViewPos_dx;
+    float3 viewPos_dy = viewPos + result.dViewPos_dy;
 
-    //result.dViewPos_dy = (viewPos_dy - viewPos) * signY;
-
-    result.B    [1] =  dot(cross(viewPos2 - viewPos              , viewPos0 - viewPos   ), N_N2);
-    result.B    [2] =  dot(cross(viewPos0 - viewPos              , viewPos1 - viewPos   ), N_N2);
-    result.dB_dx[1] = (dot(cross(viewPos2 - viewPos - result.dViewPos_dx, viewPos0 - viewPos - result.dViewPos_dx), N_N2) - result.B[1]);
-    result.dB_dx[2] = (dot(cross(viewPos0 - viewPos - result.dViewPos_dx, viewPos1 - viewPos - result.dViewPos_dx), N_N2) - result.B[2]);
-    result.dB_dy[1] = (dot(cross(viewPos2 - viewPos - result.dViewPos_dy, viewPos0 - viewPos - result.dViewPos_dy), N_N2) - result.B[1]);
-    result.dB_dy[2] = (dot(cross(viewPos0 - viewPos - result.dViewPos_dy, viewPos1 - viewPos - result.dViewPos_dy), N_N2) - result.B[2]);
+    result.B    [1] = dot(cross(viewPos2 - viewPos   , viewPos0 - viewPos   ), N_N2);
+    result.B    [2] = dot(cross(viewPos0 - viewPos   , viewPos1 - viewPos   ), N_N2);
+    result.dB_dx[1] = dot(cross(viewPos2 - viewPos_dx, viewPos0 - viewPos_dx), N_N2) - result.B[1];
+    result.dB_dx[2] = dot(cross(viewPos0 - viewPos_dx, viewPos1 - viewPos_dx), N_N2) - result.B[2];
+    result.dB_dy[1] = dot(cross(viewPos2 - viewPos_dy, viewPos0 - viewPos_dy), N_N2) - result.B[1];
+    result.dB_dy[2] = dot(cross(viewPos0 - viewPos_dy, viewPos1 - viewPos_dy), N_N2) - result.B[2];
 
     result. B   [0] = 1.0f - (result.B    [1] + result.B    [2]);
     result.dB_dx[0] =      - (result.dB_dx[1] + result.dB_dx[2]); // Note: barycentric deltas add up to zero, not one.

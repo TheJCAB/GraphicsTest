@@ -10,18 +10,21 @@
 
 #include <gdiplus.h>
 
+uint8_t SaturateByte(int value)
+{
+    return
+            value <   0 ?   0 :
+            value > 255 ? 255 :
+                          static_cast<uint8_t>(value);
+}
+
 TextureManager::TextureManager(RenderDevice& renderDevice)
 {
     FirstSrv = renderDevice.srvDescriptorHeap.AllocateDescriptors(MAX_TEXTURES);
 }
 
-Texture::Id TextureManager::AllocateNewTexture(RenderDevice& renderDevice, AssetUploader& assetUploader, std::string_view const pathName, DXGI_FORMAT const format)
+std::unique_ptr<Gdiplus::Bitmap> LoadGdiplusImage(std::string_view const pathName)
 {
-    if (auto const id = FindTexture(pathName))
-    {
-        return id;
-    }
-
     struct GdiplusStartup
     {
         ULONG_PTR gdiplusToken = UINTPTR_MAX;
@@ -35,7 +38,17 @@ Texture::Id TextureManager::AllocateNewTexture(RenderDevice& renderDevice, Asset
     static GdiplusStartup gdiplusStartup{};
 
     // Warning! Sooper-cheesy char to wchar_t conversion!
-    std::unique_ptr<Gdiplus::Bitmap> bitmap{ new Gdiplus::Bitmap(std::wstring{pathName.begin(), pathName.end()}.c_str()) };
+    return std::make_unique<Gdiplus::Bitmap>(std::wstring{pathName.begin(), pathName.end()}.c_str());
+}
+
+Texture::Id TextureManager::AllocateNewTexture(RenderDevice& renderDevice, AssetUploader& assetUploader, std::string_view const pathName, DXGI_FORMAT const format)
+{
+    if (auto const id = FindTexture(pathName))
+    {
+        return id;
+    }
+
+    auto bitmap = LoadGdiplusImage(pathName);
     Gdiplus::SizeF size;
     bitmap->GetPhysicalDimension(&size);
     auto const width       = bitmap->GetWidth();
@@ -62,6 +75,71 @@ Texture::Id TextureManager::AllocateNewTexture(RenderDevice& renderDevice, Asset
         }
     );
     TextureList[index].HasAlpha = (pixelFormat & PixelFormatAlpha) != 0;
+
+    bitmap->UnlockBits(&bitmapData);
+
+    renderDevice.UploadSrvDescriptor(FirstSrv + index, TextureList[index].Resource);
+
+    return id;
+}
+
+Texture::Id TextureManager::AllocateNewElevationTexture(RenderDevice& renderDevice, AssetUploader& assetUploader, std::string_view const pathName, DXGI_FORMAT const format)
+{
+    if (auto const id = FindTexture(pathName))
+    {
+        return id;
+    }
+
+    auto bitmap = LoadGdiplusImage(pathName);
+    Gdiplus::SizeF size;
+    bitmap->GetPhysicalDimension(&size);
+    auto const width       = bitmap->GetWidth();
+    auto const height      = bitmap->GetHeight();
+    auto const pixelFormat = bitmap->GetPixelFormat();
+    Gdiplus::BitmapData bitmapData{};
+    Gdiplus::Rect const dimensions{ 0, 0, static_cast<INT>(width), static_cast<INT>(height) };
+    bitmap->LockBits(&dimensions, Gdiplus::ImageLockModeRead, PixelFormat32bppARGB, &bitmapData);
+    using BgraPixel = std::array<uint8_t, 4>;
+    auto bitmapAddress = reinterpret_cast<uintptr_t>(bitmapData.Scan0);
+    std::vector<BgraPixel> bumpPixels;
+    bumpPixels.resize(bitmapData.Width * bitmapData.Height);
+    for(uint32_t y = 0; y < bitmapData.Height; ++y)
+    {
+        auto const previousScan = reinterpret_cast<BgraPixel const*>(bitmapAddress + ((y + height - 1) % height) * bitmapData.Stride);
+        auto const currentScan  = reinterpret_cast<BgraPixel const*>(bitmapAddress +   y                         * bitmapData.Stride);
+        auto const nextScan     = reinterpret_cast<BgraPixel const*>(bitmapAddress + ((y +          1) % height) * bitmapData.Stride);
+        auto const destScan     = bumpPixels.data() + (height - 1 - y) * width;
+
+        for(uint32_t x = 0; x < bitmapData.Width; ++x)
+        {
+            auto const previousIndex = (x + width - 1) % width;
+            auto const currentIndex  =  x                     ;
+            auto const nextIndex     = (x +         1) % width;
+            int const bx = currentScan[nextIndex][1] - currentScan[previousIndex][1];
+            int const by = previousScan[currentIndex][1] - previousScan[currentIndex][1];
+            destScan[currentIndex][2] = SaturateByte((bx * 2) + 128);
+            destScan[currentIndex][1] = SaturateByte((by * 2) + 128);
+            destScan[currentIndex][0] = static_cast<uint8_t>(255);
+        }
+    }
+
+    assert(TextureCount < TextureList.size());
+    auto const index = TextureCount;
+    auto const id = Texture::Id{ index + 1 };
+    ++TextureCount;
+
+    TextureList[index].Path = pathName;
+    TextureList[index].Resource = assetUploader.CreateStaticTexture(width, height, format, 0, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
+        [&](uint32_t x, uint32_t y, uint32_t w, void* p)
+        {
+            auto const pSrc = bumpPixels.data() + y * width + x;
+            for (uint32_t i = 0; i < w; ++i)
+            {
+                reinterpret_cast<uint32_t*>(p)[i] = static_cast<uint32_t>(pSrc[i][2] | (pSrc[i][1] << 8) | (pSrc[i][0] << 16) | (pSrc[i][3] << 24));
+            }
+        }
+    );
+    TextureList[index].HasAlpha = false;
 
     bitmap->UnlockBits(&bitmapData);
 
@@ -277,7 +355,10 @@ Material::Id MaterialManager::AllocateNewMaterial(RenderDevice& renderDevice, As
     }
     if (!material.BumpTexturePathName.empty())
     {
-        params.BumpTextureId = textureManager.AllocateNewTexture(renderDevice, assetUploader, material.BumpTexturePathName, DXGI_FORMAT_R8G8B8A8_UNORM);
+        params.BumpTextureId =
+            material.BumpTextureIsElevation
+                ? textureManager.AllocateNewElevationTexture(renderDevice, assetUploader, material.BumpTexturePathName, DXGI_FORMAT_R8G8B8A8_UNORM)
+                : textureManager.AllocateNewTexture(renderDevice, assetUploader, material.BumpTexturePathName, DXGI_FORMAT_R8G8B8A8_UNORM);
         if (textureManager.GetTexture(params.BumpTextureId).HasAlpha)
         {
             // ?
@@ -289,7 +370,7 @@ Material::Id MaterialManager::AllocateNewMaterial(RenderDevice& renderDevice, As
     }
     if (!material.SpecularTexturePathName.empty())
     {
-        params.SpecularTextureId = textureManager.AllocateNewTexture(renderDevice, assetUploader, material.SpecularTexturePathName, DXGI_FORMAT_R8G8B8A8_UNORM);
+        params.SpecularTextureId = textureManager.AllocateNewTexture(renderDevice, assetUploader, material.SpecularTexturePathName, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
         if (textureManager.GetTexture(params.SpecularTextureId).HasAlpha)
         {
             // ?

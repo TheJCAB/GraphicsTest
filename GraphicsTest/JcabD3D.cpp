@@ -225,9 +225,8 @@ RenderDevice RenderDevice::Create(HWND const hwnd, uint32_t const width, uint32_
     renderDevice.samplerDescriptorHeap = renderDevice.samplerDescriptorHeap.Create(renderDevice.device.Get(),    10, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
 
     {
-        auto const defaultSamplerIndex = renderDevice.samplerDescriptorHeap.AllocateDescriptors(1);
+        auto const defaultSamplerIndex = renderDevice.samplerDescriptorHeap.AllocateDescriptors(2);
         assert(defaultSamplerIndex == 0);
-        auto handle = renderDevice.samplerDescriptorHeap.GetCpuDescriptorHandle(defaultSamplerIndex);
     
         D3D12_SAMPLER_DESC const wrapSamplerDesc
         {
@@ -242,7 +241,7 @@ RenderDevice RenderDevice::Create(HWND const hwnd, uint32_t const width, uint32_
             .MinLOD         = 0,
             .MaxLOD         = D3D12_FLOAT32_MAX,
         };
-        renderDevice.device->CreateSampler(&wrapSamplerDesc, handle);
+        renderDevice.device->CreateSampler(&wrapSamplerDesc, renderDevice.samplerDescriptorHeap.GetCpuDescriptorHandle(defaultSamplerIndex));
 
         D3D12_SAMPLER_DESC const clampSamplerDesc
         {
@@ -257,7 +256,7 @@ RenderDevice RenderDevice::Create(HWND const hwnd, uint32_t const width, uint32_
             .MinLOD         = 0,
             .MaxLOD         = D3D12_FLOAT32_MAX,
         };
-        renderDevice.device->CreateSampler(&wrapSamplerDesc, handle);
+        renderDevice.device->CreateSampler(&wrapSamplerDesc, renderDevice.samplerDescriptorHeap.GetCpuDescriptorHandle(defaultSamplerIndex + 1));
     }
 
     // Create frame resources.
