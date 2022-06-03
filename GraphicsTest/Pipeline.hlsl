@@ -182,11 +182,9 @@ float3 CalculateViewPosForQuad(uint2 quadPos, uint sampleMask)
     float posWeight = 0;
     while (sampleMask != 0)
     {
-        while ((sampleMask & 1) == 0)
-        {
-            ++s;
-            sampleMask >>= 1;
-        }
+        uint skipSamples = firstbitlow(sampleMask);
+        s += skipSamples;
+        sampleMask >>= skipSamples;
 
         viewPos += GetSampleViewPos(quadPos, s);
         posWeight += 1;
@@ -204,11 +202,9 @@ float3 CalculateViewDirForQuad(uint2 quadPos, uint sampleMask)
     float posWeight = 0;
     while (sampleMask != 0)
     {
-        while ((sampleMask & 1) == 0)
-        {
-            ++s;
-            sampleMask >>= 1;
-        }
+        uint skipSamples = firstbitlow(sampleMask);
+        s += skipSamples;
+        sampleMask >>= skipSamples;
 
         viewDir += GetSamplePos(quadPos, s);
         posWeight += 1;
@@ -217,6 +213,54 @@ float3 CalculateViewDirForQuad(uint2 quadPos, uint sampleMask)
     }
 
     return normalize(ScreenPosToViewPos(viewDir / posWeight, -1.0f));
+}
+
+float4x2 CalculatePixelOffsetsForSampleMask(uint sampleMask)
+{
+    float3 offsets[4] = { float3(0, 0, 0), float3(0, 0, 0), float3(0, 0, 0), float3(0, 0, 0) };
+    uint s = 0;
+    float posWeight = 0;
+    while (sampleMask != 0)
+    {
+        uint skipSamples = firstbitlow(sampleMask);
+        s += skipSamples;
+        sampleMask >>= skipSamples;
+
+        offsets[s / 8] += float3(visibilityMap.GetSamplePosition(GetVisibilitySample(s)), 1.0f);
+        ++s;
+        sampleMask >>= 1;
+    }
+
+    offsets[0].xy += float2(-0.5f, -0.5f) * offsets[0].z;
+    offsets[1].xy += float2( 0.5f, -0.5f) * offsets[1].z;
+    offsets[2].xy += float2(-0.5f,  0.5f) * offsets[2].z;
+    offsets[3].xy += float2( 0.5f,  0.5f) * offsets[3].z;
+
+    float3 pixelCenter = offsets[0] + offsets[1] + offsets[2] + offsets[3];
+    pixelCenter.xy /= pixelCenter.z;
+
+    if (offsets[0].z > 0)
+    {
+        offsets[0].xy /= offsets[0].z;
+    }
+    if (offsets[1].z > 0)
+    {
+        offsets[1].xy /= offsets[1].z;
+    }
+    if (offsets[2].z > 0)
+    {
+        offsets[2].xy /= offsets[2].z;
+    }
+    if (offsets[3].z > 0)
+    {
+        offsets[3].xy /= offsets[3].z;
+    }
+    return float4x2(
+        offsets[0].xy - pixelCenter.xy,
+        offsets[1].xy - pixelCenter.xy,
+        offsets[2].xy - pixelCenter.xy,
+        offsets[3].xy - pixelCenter.xy
+    );
 }
 
 uint4 DecodeWeights(uint mask)
@@ -253,25 +297,32 @@ void ColorPass(uint3 pos : SV_DispatchThreadID)
             uint v = msample.Visibility;
             if (v == 0)
             {
-                float3 viewDir = CalculateViewDirForQuad(pos.xy, msample.SampleMask);
-                float3 skyMapColor = SampleSkymap(sceneConstants.ViewSpace, textures[0], viewDir).xyz;
+                float3 viewDir0 = CalculateViewDirForQuad(pos.xy, msample.SampleMask & 0xFF);
+                float3 viewDir1 = CalculateViewDirForQuad(pos.xy, msample.SampleMask & 0xFF00);
+                float3 viewDir2 = CalculateViewDirForQuad(pos.xy, msample.SampleMask & 0xFF0000);
+                float3 viewDir3 = CalculateViewDirForQuad(pos.xy, msample.SampleMask & 0xFF000000);
+                float3 skyMapColor0 = SampleSkymap(sceneConstants.ViewSpace, textures[0], viewDir0).xyz;
+                float3 skyMapColor1 = SampleSkymap(sceneConstants.ViewSpace, textures[0], viewDir1).xyz;
+                float3 skyMapColor2 = SampleSkymap(sceneConstants.ViewSpace, textures[0], viewDir2).xyz;
+                float3 skyMapColor3 = SampleSkymap(sceneConstants.ViewSpace, textures[0], viewDir3).xyz;
 
-                color[0] += weights[0] * float4(skyMapColor, 1);
-                color[1] += weights[1] * float4(skyMapColor, 1);
-                color[2] += weights[2] * float4(skyMapColor, 1);
-                color[3] += weights[3] * float4(skyMapColor, 1);
+                color[0] += weights[0] * float4(skyMapColor0, 1);
+                color[1] += weights[1] * float4(skyMapColor1, 1);
+                color[2] += weights[2] * float4(skyMapColor2, 1);
+                color[3] += weights[3] * float4(skyMapColor3, 1);
             }
             else
             {
                 float3 viewPos = CalculateViewPosForQuad(pos.xy, msample.SampleMask);
-                GBufferSample gSample = GetGBufferSample(sceneConstants.ViewSpace, v, viewPos);
 
-                float3 lightedColor = LightPixel(sceneConstants.ViewSpace, gSample);
+                GBufferSample4 gSample = GetGBufferSample4(sceneConstants.ViewSpace, v, viewPos, CalculatePixelOffsetsForSampleMask(msample.SampleMask));
 
-                color[0] += weights[0] * float4(lightedColor, 1);
-                color[1] += weights[1] * float4(lightedColor, 1);
-                color[2] += weights[2] * float4(lightedColor, 1);
-                color[3] += weights[3] * float4(lightedColor, 1);
+                float4x3 lightedColor = LightPixel4(sceneConstants.ViewSpace, gSample);
+
+                color[0] += weights[0] * float4(lightedColor[0], 1);
+                color[1] += weights[1] * float4(lightedColor[1], 1);
+                color[2] += weights[2] * float4(lightedColor[2], 1);
+                color[3] += weights[3] * float4(lightedColor[3], 1);
             }
         }
     }
