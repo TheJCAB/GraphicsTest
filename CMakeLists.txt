@@ -11,4 +11,5 @@ set(CMAKE_SHARED_LINKER_FLAGS_CHECKED "/debug /INCREMENTAL")
 project ("GraphicsTest")
 
 # Include sub-projects.
+add_subdirectory ("JcabD3D")
 add_subdirectory ("GraphicsTest")

@@ -1,94 +1,17 @@
 #pragma once
 
-#include <wrl.h>
-#include <d3d12.h>
-#include <dxgi1_6.h>
-#include <d3dcompiler.h>
-#include <DirectXMath.h>
+#include <JcabD3D/Base.h>
+#include <JcabD3D/Descriptorheap.h>
+#include <JcabD3D/CommandList.h>
 
 #include <array>
 #include <span>
 #include <variant>
 #include <functional>
 
-
-// Note that while ComPtr is used to manage the lifetime of resources on the CPU,
-// it has no understanding of the lifetime of resources on the GPU. Apps must account
-// for the GPU lifetime of resources to avoid destroying objects that may still be
-// referenced by the GPU.
-using Microsoft::WRL::ComPtr;
-
-template < typename Interface >
-class ComRef
-{
-public:
-    ComRef(Interface* pInterface              ) : m_pInterface{ pInterface       } {}
-    ComRef(ComPtr<Interface> const& pInterface) : m_pInterface{ pInterface.Get() } {}
-
-    Interface* Get        () const { return m_pInterface; }
-    Interface* operator-> () const { return m_pInterface; }
-    operator Interface*   () const { return m_pInterface; }
-    explicit operator bool() const { return m_pInterface != nullptr; }
-
-private:
-    Interface* m_pInterface;
-};
-
-using namespace DirectX;
-// using DirectX::XMFLOAT3;
-// using DirectX::XMFLOAT4;
-
-inline void ThrowIfFailed(HRESULT hr)
-{
-    if (FAILED(hr))
-    {
-        throw hr;
-    }
-}
-
-
 namespace Root     { template < typename... args > struct Signature; }
 namespace Pipeline {                               struct State;     }
 namespace Compute  {                               struct State;     }
-
-
-
-ComPtr<IDXGIAdapter1> FindHardwareAdapter(ComRef<IDXGIFactory1> pFactory, bool requestHighPerformanceAdapter = true);
-
-// Helper function for acquiring the first available hardware adapter that supports Direct3D 12.
-// If no such adapter can be found, *ppAdapter will be set to nullptr.
-ComPtr<IDXGIAdapter1> GetPreferredAdapter(ComRef<IDXGIFactory1> pFactory, bool requestHighPerformanceAdapter = true);
-
-
-
-template < D3D12_DESCRIPTOR_HEAP_TYPE type >
-class DescriptorHeap
-{
-public:
-    UINT AllocateDescriptors(UINT count);
-
-    D3D12_CPU_DESCRIPTOR_HANDLE GetCpuDescriptorHandle(UINT index) const;
-    D3D12_GPU_DESCRIPTOR_HANDLE GetGpuDescriptorHandle(UINT index) const;
-
-    D3D12_CPU_DESCRIPTOR_HANDLE NextDescriptorHandle(D3D12_CPU_DESCRIPTOR_HANDLE handle) const;
-    D3D12_GPU_DESCRIPTOR_HANDLE NextDescriptorHandle(D3D12_GPU_DESCRIPTOR_HANDLE handle) const;
-
-    ID3D12DescriptorHeap* Get            () const { return heap.Get(); }
-    ID3D12DescriptorHeap* operator->     () const { return heap.Get(); }
-    operator ID3D12DescriptorHeap*       () const { return heap.Get(); }
-    operator ComRef<ID3D12DescriptorHeap>() const { return heap.Get(); }
-    explicit operator bool               () const { return heap; }
-
-    ComPtr<IUnknown> Extract() && { return std::move(heap); }
-
-    static DescriptorHeap<type> Create(ComRef<ID3D12Device> device, UINT count, D3D12_DESCRIPTOR_HEAP_FLAGS flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE);
-
-private:
-    ComPtr<ID3D12DescriptorHeap> heap;
-    UINT                         descriptorSize  = 0;
-    UINT                         descriptorCount = 0;
-    UINT                         descriptorsUsed = 0;
-};
 
 class GpuSignalingFence
 {
@@ -118,10 +41,10 @@ struct RenderDevice
     ComPtr<ID3D12CommandQueue> commandQueue;
     ComPtr<IDXGISwapChain3>    swapChain;
 
-    DescriptorHeap<D3D12_DESCRIPTOR_HEAP_TYPE_RTV        > rtvDescriptorHeap;
-    DescriptorHeap<D3D12_DESCRIPTOR_HEAP_TYPE_DSV        > dsvDescriptorHeap;
-    DescriptorHeap<D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV> srvDescriptorHeap;
-    DescriptorHeap<D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER    > samplerDescriptorHeap;
+    RtvDescriptorHeap     rtvDescriptorHeap;
+    DsvDescriptorHeap     dsvDescriptorHeap;
+    CsuvDescriptorHeap    srvDescriptorHeap;
+    SamplerDescriptorHeap samplerDescriptorHeap;
 
     uint32_t Width  = 0;
     uint32_t Height = 0;
@@ -131,7 +54,7 @@ struct RenderDevice
 
     ComPtr<ID3D12CommandAllocator> assetsCommandAllocator;
 
-    ComPtr<ID3D12GraphicsCommandList> commandList;
+    GraphicsCommandList commandList;
 
     std::array<ComPtr<ID3D12Resource>        , FrameCount> renderTargets;
     std::array<ComPtr<ID3D12CommandAllocator>, FrameCount> commandAllocators;
@@ -152,7 +75,7 @@ struct RenderDevice
     ComPtr<ID3D12PipelineState> Create(Pipeline::State const&) const;
     ComPtr<ID3D12PipelineState> Create(Compute::State const&) const;
 
-    ComPtr<ID3D12GraphicsCommandList> CreateDirectCommandList(ComRef<ID3D12CommandAllocator>, ComRef<ID3D12PipelineState> = nullptr) const;
+    GraphicsCommandList CreateDirectCommandList(ComRef<ID3D12CommandAllocator>, ComRef<ID3D12PipelineState> = nullptr) const;
 
     void UploadSrvDescriptor(UINT index, ComRef<ID3D12Resource>);
     void UploadSrvDescriptor(UINT index, ComRef<ID3D12Resource>, D3D12_SHADER_RESOURCE_VIEW_DESC const&);
@@ -161,7 +84,7 @@ struct RenderDevice
     UINT AllocateSrvDescriptor(ComRef<ID3D12Resource>, D3D12_SHADER_RESOURCE_VIEW_DESC const&);
     UINT AllocateUavDescriptor(ComRef<ID3D12Resource>, D3D12_UNORDERED_ACCESS_VIEW_DESC const&);
 
-    void ExecuteCommandList(ComRef<ID3D12GraphicsCommandList>);
+    void ExecuteCommandList(GraphicsCommandList const&);
 
     void WaitForGpuIdle() { fence->WaitForGpuIdle(); }
 
@@ -171,7 +94,7 @@ struct RenderDevice
     static RenderDevice Create(HWND hwnd, uint32_t width, uint32_t height);
 };
 
-void ExecuteCommandList(ComRef<ID3D12CommandQueue>, ComRef<ID3D12GraphicsCommandList>);
+void ExecuteCommandList(ComRef<ID3D12CommandQueue>, GraphicsCommandList const&);
 
 ComPtr<ID3D12Resource> CreateUploadBuffer(ComRef<ID3D12Device>, UINT size); // CPU-mapped, usable to render or to upload data.
 ComPtr<ID3D12Resource> CreateGpuBuffer   (ComRef<ID3D12Device>, UINT size); // UAV-ready buffer for GPU use only.
@@ -345,7 +268,7 @@ inline ConstantBuffer<T, Count> ConstantBuffer<T, Count>::Create(ComRef<ID3D12De
 }
 
 
-inline void TransitionResource(ComRef<ID3D12GraphicsCommandList> commandList, ComRef<ID3D12Resource> resource, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to)
+inline void TransitionResource(GraphicsCommandList const& commandList, ComRef<ID3D12Resource> resource, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to)
 {
     D3D12_RESOURCE_BARRIER const barrier
     {
@@ -361,7 +284,7 @@ inline void TransitionResource(ComRef<ID3D12GraphicsCommandList> commandList, Co
     commandList->ResourceBarrier(1, &barrier);
 }
 
-inline void UavBarrier(ComRef<ID3D12GraphicsCommandList> commandList, ComRef<ID3D12Resource> resource)
+inline void UavBarrier(GraphicsCommandList const& commandList, ComRef<ID3D12Resource> resource)
 {
     D3D12_RESOURCE_BARRIER const barrier
     {
@@ -381,9 +304,9 @@ public:
     static SinglePassCommandList Create(RootParams&&...);
 
 private:
-    ComPtr<ID3D12RootSignature>       m_root;
-    ComPtr<ID3D12PipelineState>       m_state;
-    ComPtr<ID3D12GraphicsCommandList> m_commandList;
+    ComPtr<ID3D12RootSignature> m_root;
+    ComPtr<ID3D12PipelineState> m_state;
+    GraphicsCommandList         m_commandList;
 };
 
 
@@ -672,7 +595,7 @@ struct MipGenerationPass
 
     MipGenerationPass(RenderDevice const&);
 
-    void Render(ComRef<ID3D12Device>, ComRef<ID3D12GraphicsCommandList>, AssetUploader&, ComRef<ID3D12Resource> uavTexture) const;
+    void Render(ComRef<ID3D12Device>, GraphicsCommandList const&, AssetUploader&, ComRef<ID3D12Resource> uavTexture) const;
 };
 
 class AssetUploader
@@ -695,11 +618,11 @@ public:
     }
 
 private:
-    ComPtr<ID3D12Device>               m_device;
-    ComPtr<ID3D12CommandQueue>         m_queue;
-    ComPtr<ID3D12CommandAllocator>     m_allocator;
-    ComPtr<ID3D12GraphicsCommandList>  m_commandList;
-    GpuSignalingFence                  m_fence;
+    ComPtr<ID3D12Device>           m_device;
+    ComPtr<ID3D12CommandQueue>     m_queue;
+    ComPtr<ID3D12CommandAllocator> m_allocator;
+    GraphicsCommandList            m_commandList;
+    GpuSignalingFence              m_fence;
 
     struct PendingObject
     {

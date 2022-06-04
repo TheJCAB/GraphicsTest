@@ -3,59 +3,15 @@
 #
 cmake_minimum_required (VERSION 3.20)
 
-find_program(DXC_COMPILER_TOOL dxc)
-
-set(SHADERS_DIR "${CMAKE_BINARY_DIR}/Shaders")
-
-function(add_hlsl_shader TargetName HlslFile ShaderModel FunctionName ShaderName)
-
-    if("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
-        set(DxcOptimization -Od)
-    else()
-        set(DxcOptimization -O3)
-    endif()
-
-
-    add_custom_command(
-        COMMAND
-            "${DXC_COMPILER_TOOL}" -nologo
-            "${CMAKE_CURRENT_SOURCE_DIR}\\${HlslFile}"
-            -Fh "${SHADERS_DIR}\\${ShaderName}.h"
-            -T ${ShaderModel}
-            -E ${FunctionName}
-            -Vn ${ShaderName}
-            -Zi -Zss -Qstrip_debug -Fd "${CMAKE_BINARY_DIR}\\"
-            -DHLSL=1
-            ${DxcOptimization}
-            # Someday: -HV 2021
-        MAIN_DEPENDENCY
-            "${CMAKE_CURRENT_SOURCE_DIR}/${HlslFile}"
-        DEPENDS
-            HLSL.h
-            ${ARGN}
-        OUTPUT
-            "${SHADERS_DIR}/${ShaderName}.h"
-    )
-
-    target_sources(${TargetName} PRIVATE "${SHADERS_DIR}/${ShaderName}.h")
-
-    target_include_directories(${TargetName} PRIVATE "${SHADERS_DIR}")
-
-endfunction()
-
-
-# Add source to this project's executable.
 add_executable (GraphicsTest WIN32
 	GraphicsTest.cpp
 
-	JcabD3D.cpp         JcabD3D.h
 	Model.cpp           Model.h
 	ObjModel.cpp        ObjModel.h
 	Pipeline.cpp        Pipeline.h
     Pipeline2.cpp       Pipeline2.h
     Pipeline3.cpp       Pipeline3.h
 
-    HLSL.h
     IRenderPipeline.h
     ViewSpace.h
     Lighting.h
@@ -83,26 +39,10 @@ add_hlsl_shader(GraphicsTest Pipeline3.hlsl "cs_6_0" Postprocess    VisDefMsaa3P
 add_hlsl_shader(GraphicsTest Pipeline3.hlsl "vs_6_0" ResolveVS      VisDefMsaa3Pipeline_ResolveVSShader      Pipeline3.h Lighting.h ViewSpace.h Model.h)
 add_hlsl_shader(GraphicsTest Pipeline3.hlsl "ps_6_0" ResolvePS      VisDefMsaa3Pipeline_ResolvePSShader      Pipeline3.h Lighting.h ViewSpace.h Model.h)
 
-add_hlsl_shader(GraphicsTest JcabD3D.hlsl "cs_6_0" MipGenerationPassSRGB MipGenerationPassShaderSRGB)
-add_hlsl_shader(GraphicsTest JcabD3D.hlsl "cs_6_0" MipGenerationPass     MipGenerationPassShader)
-
 target_compile_definitions(GraphicsTest PRIVATE UNICODE _UNICODE)
 
-target_link_libraries(GraphicsTest PRIVATE d3d12.lib dxgi.lib d3dcompiler.lib gdiplus.lib)
+target_link_libraries(GraphicsTest PRIVATE JcabD3D)
 
 set_property(TARGET GraphicsTest PROPERTY CXX_STANDARD 20)
-
-#function(copy_hlsl_file TargetName File)
-#    add_custom_command(
-#        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${File}"
-#        COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_CURRENT_SOURCE_DIR}/${File}" "${CMAKE_CURRENT_BINARY_DIR}/${File}"
-#        MAIN_DEPENDENCY "${CMAKE_CURRENT_SOURCE_DIR}/${File}"
-#    )
-#    add_custom_target(${File}_TARGET DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/${File}")
-#    add_dependencies(${TargetName} ${File}_TARGET)
-#endfunction()
-#
-#copy_hlsl_file(GraphicsTest model.hlsl)
-#copy_hlsl_file(GraphicsTest JcabD3D.hlsl)
 
 # TODO: Add tests and install targets if needed.

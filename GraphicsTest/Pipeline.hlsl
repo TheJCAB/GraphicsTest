@@ -70,6 +70,7 @@ float3 GetSampleViewPos(uint2 pos, int s)
 uint NumQuadsX() { return sceneConstants.ViewSpace.Size.x                                   / PSamplesX; }
 uint NumQuadsY() { return sceneConstants.ViewSpace.Size.y                                   / PSamplesY; }
 uint NumQuads () { return sceneConstants.ViewSpace.Size.x * sceneConstants.ViewSpace.Size.y / PSamples ; }
+uint2 SizeInQuads() { return sceneConstants.ViewSpace.Size / uint2(PSamplesX, PSamplesY); }
 
 struct MsaaSample
 {
@@ -85,6 +86,11 @@ groupshared uint2 visibilityListGS[(32 / PSamplesX) * (16 / PSamplesY)][8 * PSam
 [numthreads(32 / PSamplesX, 16 / PSamplesY, 1)]
 void MsaaGatherPass(uint3 pos : SV_DispatchThreadID, uint tindex : SV_GroupIndex)
 {
+    if (any(pos.xy >= SizeInQuads()))
+    {
+        return;
+    }
+
     // Register arrays are more expensive, apparently, so we use GDS.
     //uint2 visibilityList[8 * PSamples];
     #undef visibilityList
@@ -276,6 +282,11 @@ uint4 DecodeWeights(uint mask)
 [numthreads(64 / PSamplesX, 16 / PSamplesY, 1)]
 void ColorPass(uint3 pos : SV_DispatchThreadID)
 {
+    if (any(pos.xy >= SizeInQuads()))
+    {
+        return;
+    }
+
     float4x4 color = 0;
 
     uint computableIndex = pos.x + pos.y * NumQuadsX();

@@ -69,8 +69,7 @@ void MsaaGatherPass::Render(RenderDevice const& renderDevice, SceneGraphAssets c
     renderDevice.commandList->SetComputeRootSignature(RootSignature.Get());
     renderDevice.commandList->SetPipelineState       (PipelineState.Get());
 
-    ID3D12DescriptorHeap* const heaps[]{ renderDevice.srvDescriptorHeap };
-    renderDevice.commandList->SetDescriptorHeaps(1, heaps);
+    renderDevice.commandList.SetDescriptorHeap(renderDevice.srvDescriptorHeap);
 
     renderDevice.commandList->SetComputeRootConstantBufferView(0, assets.SceneConstantsBuffer[renderDevice.frameIndex].Buffer->GetGPUVirtualAddress());
     renderDevice.commandList->SetComputeRootDescriptorTable   (1, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(assets.VisibilityBuffer.SrvDescriptorIndex));
@@ -120,8 +119,7 @@ void ColorPass::Render(RenderDevice const& renderDevice, SceneGraphAssets const&
     renderDevice.commandList->SetComputeRootSignature(RootSignature.Get());
     renderDevice.commandList->SetPipelineState       (PipelineState.Get());
 
-    ID3D12DescriptorHeap* const heaps[]{ renderDevice.srvDescriptorHeap, renderDevice.samplerDescriptorHeap  };
-    renderDevice.commandList->SetDescriptorHeaps(2, heaps);
+    renderDevice.commandList.SetDescriptorHeaps(renderDevice.srvDescriptorHeap, renderDevice.samplerDescriptorHeap);
 
     renderDevice.commandList->SetComputeRootConstantBufferView(0, assets.SceneConstantsBuffer[renderDevice.frameIndex].Buffer->GetGPUVirtualAddress());
     renderDevice.commandList->SetComputeRootDescriptorTable   (1, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(sceneGraphAssets.InstanceManager.GetCurrentFrameInstanceAttributes(renderDevice).SrvIndex));
@@ -171,8 +169,7 @@ void PostprocessPass::Render(RenderDevice const& renderDevice, RenderPipelineAss
     renderDevice.commandList->SetComputeRootSignature(RootSignature.Get());
     renderDevice.commandList->SetPipelineState       (PipelineState.Get());
 
-    ID3D12DescriptorHeap* const heaps[]{ renderDevice.srvDescriptorHeap };
-    renderDevice.commandList->SetDescriptorHeaps(1, heaps);
+    renderDevice.commandList.SetDescriptorHeap(renderDevice.srvDescriptorHeap);
 
     renderDevice.commandList->SetComputeRootConstantBufferView(0, assets.SceneConstantsBuffer[renderDevice.frameIndex].Buffer->GetGPUVirtualAddress());
     renderDevice.commandList->SetComputeRootDescriptorTable   (1, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(assets.VisibilityBuffer.SrvDescriptorIndex));
@@ -215,8 +212,7 @@ void ResolvePass::Render(RenderDevice const& renderDevice, RenderPipelineAssets 
     renderDevice.commandList->SetGraphicsRootSignature(RootSignature.Get());
     renderDevice.commandList->SetPipelineState        (PipelineState.Get());
 
-    ID3D12DescriptorHeap* const heaps[]{ renderDevice.srvDescriptorHeap };
-    renderDevice.commandList->SetDescriptorHeaps(1, heaps);
+    renderDevice.commandList.SetDescriptorHeap(renderDevice.srvDescriptorHeap);
 
     renderDevice.commandList->IASetPrimitiveTopology      (D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     renderDevice.commandList->SetGraphicsRootConstantBufferView(0, assets.SceneConstantsBuffer[renderDevice.frameIndex].Buffer->GetGPUVirtualAddress());

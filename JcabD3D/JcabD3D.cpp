@@ -1,6 +1,8 @@
 
 #include "JcabD3D.h"
 
+#include <JcabD3D/CommandList.h>
+
 #include "MipGenerationPassShaderSRGB.h"
 #include "MipGenerationPassShader.h"
 
@@ -42,7 +44,7 @@ ComPtr<IDXGIAdapter1> FindHardwareAdapter(ComRef<IDXGIFactory1> pFactory, bool r
 
 // Helper function for acquiring the first available hardware adapter that supports Direct3D 12.
 // If no such adapter can be found, *ppAdapter will be set to nullptr.
-ComPtr<IDXGIAdapter1> GetPreferredAdapter(ComRef<IDXGIFactory1> pFactory, bool requestHighPerformanceAdapter)
+ComPtr<IDXGIAdapter1> GetPreferredAdapter(ComRef<IDXGIFactory1> pFactory, bool requestHighPerformanceAdapter = true)
 {
     auto adapter = FindHardwareAdapter(pFactory, requestHighPerformanceAdapter);
 
@@ -77,69 +79,6 @@ ComPtr<IDXGIAdapter1> GetPreferredAdapter(ComRef<IDXGIFactory1> pFactory, bool r
 
 
 
-
-template < D3D12_DESCRIPTOR_HEAP_TYPE type >
-UINT DescriptorHeap<type>::AllocateDescriptors(UINT count)
-{
-    auto result = descriptorsUsed;
-    descriptorsUsed += count;
-    return result;
-}
-
-template < D3D12_DESCRIPTOR_HEAP_TYPE type >
-D3D12_CPU_DESCRIPTOR_HANDLE DescriptorHeap<type>::GetCpuDescriptorHandle(UINT index) const
-{
-    auto handle = heap->GetCPUDescriptorHandleForHeapStart();
-    handle.ptr += descriptorSize * index;
-    return handle;
-}
-
-template < D3D12_DESCRIPTOR_HEAP_TYPE type >
-D3D12_CPU_DESCRIPTOR_HANDLE DescriptorHeap<type>::NextDescriptorHandle(D3D12_CPU_DESCRIPTOR_HANDLE handle) const
-{
-    handle.ptr += descriptorSize;
-    return handle;
-}
-
-template < D3D12_DESCRIPTOR_HEAP_TYPE type >
-D3D12_GPU_DESCRIPTOR_HANDLE DescriptorHeap<type>::GetGpuDescriptorHandle(UINT index) const
-{
-    auto handle = heap->GetGPUDescriptorHandleForHeapStart();
-    handle.ptr += descriptorSize * index;
-    return handle;
-}
-
-template < D3D12_DESCRIPTOR_HEAP_TYPE type >
-D3D12_GPU_DESCRIPTOR_HANDLE DescriptorHeap<type>::NextDescriptorHandle(D3D12_GPU_DESCRIPTOR_HANDLE handle) const
-{
-    handle.ptr += descriptorSize;
-    return handle;
-}
-
-template < D3D12_DESCRIPTOR_HEAP_TYPE type >
-DescriptorHeap<type> DescriptorHeap<type>::Create(ComRef<ID3D12Device> device, UINT count, D3D12_DESCRIPTOR_HEAP_FLAGS flags)
-{
-    DescriptorHeap<type> result;
-    result.descriptorSize  = device->GetDescriptorHandleIncrementSize(type);
-    result.descriptorCount = count;
-
-    // Describe and create a render target view (RTV) descriptor heap.
-    D3D12_DESCRIPTOR_HEAP_DESC const heapDesc
-    {
-        .Type           = type,
-        .NumDescriptors = count,
-        .Flags          = flags,
-    };
-    ThrowIfFailed(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&result.heap)));
-
-    return result;
-}
-
-// Instantiate.
-template class DescriptorHeap<D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV>;
-template class DescriptorHeap<D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER    >;
-template class DescriptorHeap<D3D12_DESCRIPTOR_HEAP_TYPE_RTV        >;
-template class DescriptorHeap<D3D12_DESCRIPTOR_HEAP_TYPE_DSV        >;
 
 
 
@@ -219,10 +158,10 @@ RenderDevice RenderDevice::Create(HWND const hwnd, uint32_t const width, uint32_
     renderDevice.scissorRect = D3D12_RECT    { 0, 0, static_cast<LONG >(width), static_cast<LONG >(height) };
 
     // Create descriptor heaps.
-    renderDevice.rtvDescriptorHeap     = renderDevice.rtvDescriptorHeap    .Create(renderDevice.device.Get(),   100);
-    renderDevice.dsvDescriptorHeap     = renderDevice.dsvDescriptorHeap    .Create(renderDevice.device.Get(),   100);
-    renderDevice.srvDescriptorHeap     = renderDevice.srvDescriptorHeap    .Create(renderDevice.device.Get(), 10000, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
-    renderDevice.samplerDescriptorHeap = renderDevice.samplerDescriptorHeap.Create(renderDevice.device.Get(),    10, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
+    renderDevice.rtvDescriptorHeap     = RtvDescriptorHeap    { renderDevice.device.Get(),   100 };
+    renderDevice.dsvDescriptorHeap     = DsvDescriptorHeap    { renderDevice.device.Get(),   100 };
+    renderDevice.srvDescriptorHeap     = CsuvDescriptorHeap   { renderDevice.device.Get(), 10000, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE };
+    renderDevice.samplerDescriptorHeap = SamplerDescriptorHeap{ renderDevice.device.Get(),    10, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE };
 
     {
         auto const defaultSamplerIndex = renderDevice.samplerDescriptorHeap.AllocateDescriptors(2);
@@ -334,11 +273,11 @@ ComPtr<ID3D12RootSignature> RenderDevice::Create(D3D12_ROOT_SIGNATURE_DESC1 cons
     return Create(reinterpret_cast<D3D12_ROOT_SIGNATURE_DESC const&>(desc));
 }
 
-ComPtr<ID3D12GraphicsCommandList> RenderDevice::CreateDirectCommandList(ComRef<ID3D12CommandAllocator> allocator, ComRef<ID3D12PipelineState> pipelineState) const
+GraphicsCommandList RenderDevice::CreateDirectCommandList(ComRef<ID3D12CommandAllocator> allocator, ComRef<ID3D12PipelineState> pipelineState) const
 {
     ComPtr<ID3D12GraphicsCommandList> commandList;
     ThrowIfFailed(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator, pipelineState, IID_PPV_ARGS(&commandList)));
-    return commandList;
+    return GraphicsCommandList { std::move(commandList) };
 }
 
 void RenderDevice::UploadSrvDescriptor(UINT index, ComRef<ID3D12Resource> const resource)
@@ -406,15 +345,15 @@ GpuSignalingFence::GpuSignalingFence(ComRef<ID3D12Device> const device, ComPtr<I
     m_queue = std::move(queue);
 }
 
-void ExecuteCommandList(ComRef<ID3D12CommandQueue> const queue, ComRef<ID3D12GraphicsCommandList> const commandList)
+void ExecuteCommandList(ComRef<ID3D12CommandQueue> const queue, GraphicsCommandList const& commandList)
 {
     ID3D12CommandList* const list = commandList;
     queue->ExecuteCommandLists(1, &list);
 }
 
-void RenderDevice::ExecuteCommandList(ComRef<ID3D12GraphicsCommandList> const commandList)
+void RenderDevice::ExecuteCommandList(GraphicsCommandList const& commandList)
 {
-    ID3D12CommandList* const list = commandList;
+    ID3D12CommandList* const list = commandList.Get();
     commandQueue->ExecuteCommandLists(1, &list);
 }
 
@@ -788,12 +727,12 @@ MipGenerationPass::MipGenerationPass(RenderDevice const& renderDevice)
     );
 }
 
-void MipGenerationPass::Render(ComRef<ID3D12Device> device, ComRef<ID3D12GraphicsCommandList> commandList, AssetUploader& uploader, ComRef<ID3D12Resource> uavTexture) const
+void MipGenerationPass::Render(ComRef<ID3D12Device> device, GraphicsCommandList const& commandList, AssetUploader& uploader, ComRef<ID3D12Resource> uavTexture) const
 {
     auto const desc = uavTexture->GetDesc();
 
-    auto descriptorHeap = DescriptorHeap<D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV>::Create(device, (desc.MipLevels - 1) * 2, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
-    auto samplerHeap    = DescriptorHeap<D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER    >::Create(device, 1                       , D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
+    auto descriptorHeap = CsuvDescriptorHeap   { device, static_cast<uint32_t>((desc.MipLevels - 1) * 2), D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE };
+    auto samplerHeap    = SamplerDescriptorHeap{ device, static_cast<uint32_t>(1                       ), D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE };
 
     commandList->SetComputeRootSignature(RootSignature.Get());
     commandList->SetPipelineState       (desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB ? PipelineStateSRGB.Get() : PipelineState.Get());
@@ -815,8 +754,7 @@ void MipGenerationPass::Render(ComRef<ID3D12Device> device, ComRef<ID3D12Graphic
     };
     device->CreateSampler(&samplerDesc, samplerHeap.GetCpuDescriptorHandle(sampler));
 
-    ID3D12DescriptorHeap* const heaps[]{ descriptorHeap, samplerHeap };
-    commandList->SetDescriptorHeaps(2, heaps);
+    commandList.SetDescriptorHeaps(descriptorHeap, samplerHeap);
 
     commandList->SetComputeRootDescriptorTable(3, samplerHeap.GetGpuDescriptorHandle(sampler));
 

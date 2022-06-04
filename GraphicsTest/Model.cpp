@@ -642,8 +642,7 @@ void VisibilityPass::Render(RenderDevice const& renderDevice, SceneGraphAssets c
     renderDevice.commandList->SetGraphicsRootSignature(RootSignature.Get());
     renderDevice.commandList->SetPipelineState        (SolidPipelineState.Get());
 
-    ID3D12DescriptorHeap* const heaps[]{ renderDevice.srvDescriptorHeap, renderDevice.samplerDescriptorHeap };
-    renderDevice.commandList->SetDescriptorHeaps(2, heaps);
+    renderDevice.commandList.SetDescriptorHeaps(renderDevice.srvDescriptorHeap, renderDevice.samplerDescriptorHeap);
 
     auto const rtvHandle = renderDevice.rtvDescriptorHeap.GetCpuDescriptorHandle(visibilityBuffer.RtvDescriptorIndex);
     auto const dsvHandle = renderDevice.dsvDescriptorHeap.GetCpuDescriptorHandle(depthBuffer     .DsvDescriptorIndex);
