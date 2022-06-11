@@ -2,9 +2,7 @@
 #include "JcabD3D.h"
 
 #include <JcabD3D/CommandList.h>
-
-#include "MipGenerationPassShaderSRGB.h"
-#include "MipGenerationPassShader.h"
+#include <JcabD3D/RootSignatureBuilder.h>
 
 ComPtr<IDXGIAdapter1> FindHardwareAdapter(ComRef<IDXGIFactory1> pFactory, bool requestHighPerformanceAdapter)
 {
@@ -258,21 +256,6 @@ ComPtr<ID3D12CommandAllocator> RenderDevice::CreateCommandAllocator(D3D12_COMMAN
     return allocator;
 }
 
-ComPtr<ID3D12RootSignature> RenderDevice::Create(D3D12_ROOT_SIGNATURE_DESC  const& desc) const
-{
-    ComPtr<ID3D12RootSignature> rootSignature;
-    ComPtr<ID3DBlob> signature;
-    ComPtr<ID3DBlob> error;
-    ThrowIfFailed(D3D12SerializeRootSignature(reinterpret_cast<D3D12_ROOT_SIGNATURE_DESC const*>(&desc), D3D_ROOT_SIGNATURE_VERSION_1, &signature, &error));
-    ThrowIfFailed(device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(), IID_PPV_ARGS(&rootSignature)));
-    return rootSignature;
-}
-
-ComPtr<ID3D12RootSignature> RenderDevice::Create(D3D12_ROOT_SIGNATURE_DESC1 const& desc) const
-{
-    return Create(reinterpret_cast<D3D12_ROOT_SIGNATURE_DESC const&>(desc));
-}
-
 GraphicsCommandList RenderDevice::CreateDirectCommandList(ComRef<ID3D12CommandAllocator> allocator, ComRef<ID3D12PipelineState> pipelineState) const
 {
     ComPtr<ID3D12GraphicsCommandList> commandList;
@@ -347,7 +330,7 @@ GpuSignalingFence::GpuSignalingFence(ComRef<ID3D12Device> const device, ComPtr<I
 
 void ExecuteCommandList(ComRef<ID3D12CommandQueue> const queue, GraphicsCommandList const& commandList)
 {
-    ID3D12CommandList* const list = commandList;
+    ID3D12CommandList* const list = commandList.Get();
     queue->ExecuteCommandLists(1, &list);
 }
 
@@ -490,7 +473,7 @@ ComPtr<ID3D12PipelineState> RenderDevice::Create(Pipeline::State const& state) c
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC const desc
     {
-        .pRootSignature        = state.RootSignature,
+        .pRootSignature        = state.RootSignature.Get(),
         .VS                    = GetShaderBytecode(state.VS),
         .PS                    = GetShaderBytecode(state.PS),
         .DS                    = GetShaderBytecode(state.DS),
@@ -532,7 +515,7 @@ ComPtr<ID3D12PipelineState> RenderDevice::Create(Compute::State const& state) co
 
     D3D12_COMPUTE_PIPELINE_STATE_DESC const desc
     {
-        .pRootSignature = state.RootSignature,
+        .pRootSignature = state.RootSignature.Get(),
         .CS             = GetShaderBytecode(state.CS),
     };
     ThrowIfFailed(device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&result)));
@@ -700,17 +683,26 @@ ComPtr<ID3D12Resource> AssetUploader::CreateStaticTexture(
 
 
 
+namespace MipGeneration
+{
 
-MipGenerationPass::MipGenerationPass(RenderDevice const& renderDevice)
+#include "MipGenerationPassShaderSRGB.h"
+#include "MipGenerationPassShader.h"
+
+static constexpr Root::Constants    RootSizeConstants{ .Reg = 0, .Count = 2 };
+static constexpr Root::SrvTable     RootSource       { .Reg = 0             };
+static constexpr Root::UavTable     RootDestination  { .Reg = 0             };
+static constexpr Root::SamplerTable RootSampler      { .Reg = 0             };
+
+Pass::Pass(RenderDevice const& renderDevice)
 {
     // Create the rendering root signature.
-    RootSignature = renderDevice.CreateRootSignature<
-        Root::Constants<D3D12_SHADER_VISIBILITY_ALL, 0, 2, 0>,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange    <0, 1>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange    <0, 1>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SamplerRange<0, 1>>,
-        Root::Flags<D3D12_ROOT_SIGNATURE_FLAG_NONE>
-    >();
+    RootSignature = Root::CreateSignature(renderDevice, 
+        RootSizeConstants,
+        RootSource       ,
+        RootDestination  ,
+        RootSampler      
+    );
 
     // Create the pipeline state, which includes compiling and loading shaders.
     PipelineStateSRGB = renderDevice.Create(Compute::State
@@ -727,14 +719,14 @@ MipGenerationPass::MipGenerationPass(RenderDevice const& renderDevice)
     );
 }
 
-void MipGenerationPass::Render(ComRef<ID3D12Device> device, GraphicsCommandList const& commandList, AssetUploader& uploader, ComRef<ID3D12Resource> uavTexture) const
+void Pass::Render(ComRef<ID3D12Device> device, GraphicsCommandList const& commandList, AssetUploader& uploader, ComRef<ID3D12Resource> uavTexture)
 {
     auto const desc = uavTexture->GetDesc();
 
     auto descriptorHeap = CsuvDescriptorHeap   { device, static_cast<uint32_t>((desc.MipLevels - 1) * 2), D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE };
     auto samplerHeap    = SamplerDescriptorHeap{ device, static_cast<uint32_t>(1                       ), D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE };
 
-    commandList->SetComputeRootSignature(RootSignature.Get());
+    RootSignature.SetForCompute(commandList);
     commandList->SetPipelineState       (desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB ? PipelineStateSRGB.Get() : PipelineState.Get());
 
     auto const sampler = samplerHeap.AllocateDescriptors(1);
@@ -756,7 +748,7 @@ void MipGenerationPass::Render(ComRef<ID3D12Device> device, GraphicsCommandList 
 
     commandList.SetDescriptorHeaps(descriptorHeap, samplerHeap);
 
-    commandList->SetComputeRootDescriptorTable(3, samplerHeap.GetGpuDescriptorHandle(sampler));
+    RootSignature.SetSamplerTable(commandList, RootSampler, samplerHeap.GetGpuDescriptorHandle(sampler));
 
     std::array<D3D12_PLACED_SUBRESOURCE_FOOTPRINT, D3D12_REQ_MIP_LEVELS> footprint{};
 
@@ -766,8 +758,7 @@ void MipGenerationPass::Render(ComRef<ID3D12Device> device, GraphicsCommandList 
 
     for (uint32_t i = 1; i < desc.MipLevels; ++i)
     {
-        uint32_t const constants[2]{ footprint[i].Footprint.Width, footprint[i].Footprint.Height };
-        commandList->SetComputeRoot32BitConstants(0, 2, &constants, 0);
+        RootSignature.SetConstants(commandList, RootSizeConstants, std::array{ footprint[i].Footprint.Width, footprint[i].Footprint.Height });
 
         auto const srv = descriptorHeap.AllocateDescriptors(2);
 
@@ -789,8 +780,8 @@ void MipGenerationPass::Render(ComRef<ID3D12Device> device, GraphicsCommandList 
         device->CreateShaderResourceView (uavTexture,          &srvDesc, descriptorHeap.GetCpuDescriptorHandle(srv    ));
         device->CreateUnorderedAccessView(uavTexture, nullptr, &uavDesc, descriptorHeap.GetCpuDescriptorHandle(srv + 1));
 
-        commandList->SetComputeRootDescriptorTable(1, descriptorHeap.GetGpuDescriptorHandle(srv    ));
-        commandList->SetComputeRootDescriptorTable(2, descriptorHeap.GetGpuDescriptorHandle(srv + 1));
+        RootSignature.SetSrvTable(commandList, RootSource     , descriptorHeap.GetGpuDescriptorHandle(srv    ));
+        RootSignature.SetUavTable(commandList, RootDestination, descriptorHeap.GetGpuDescriptorHandle(srv + 1));
 
         commandList->Dispatch((footprint[i].Footprint.Width + 7) / 8, (footprint[i].Footprint.Height + 7) / 8, 1);
 
@@ -801,6 +792,8 @@ void MipGenerationPass::Render(ComRef<ID3D12Device> device, GraphicsCommandList 
     uploader.HoldPendingObject(std::move(samplerHeap   ).Extract());
 }
 
+}
+// namespace MipGeneration
 
 
 AssetUploader::AssetUploader(RenderDevice const& renderDevice)

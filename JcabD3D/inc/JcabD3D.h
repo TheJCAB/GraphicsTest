@@ -3,15 +3,15 @@
 #include <JcabD3D/Base.h>
 #include <JcabD3D/Descriptorheap.h>
 #include <JcabD3D/CommandList.h>
+#include <JcabD3D/RootSignature.h>
 
 #include <array>
 #include <span>
 #include <variant>
 #include <functional>
 
-namespace Root     { template < typename... args > struct Signature; }
-namespace Pipeline {                               struct State;     }
-namespace Compute  {                               struct State;     }
+namespace Pipeline { struct State; }
+namespace Compute  { struct State; }
 
 class GpuSignalingFence
 {
@@ -66,11 +66,6 @@ struct RenderDevice
     std::shared_ptr<GpuSignalingFence> fence;
 
     ComPtr<ID3D12CommandAllocator> CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE) const;
-
-    ComPtr<ID3D12RootSignature> Create(D3D12_ROOT_SIGNATURE_DESC  const&) const;
-    ComPtr<ID3D12RootSignature> Create(D3D12_ROOT_SIGNATURE_DESC1 const&) const;
-
-    template < typename... args > ComPtr<ID3D12RootSignature> CreateRootSignature() const;
 
     ComPtr<ID3D12PipelineState> Create(Pipeline::State const&) const;
     ComPtr<ID3D12PipelineState> Create(Compute::State const&) const;
@@ -304,179 +299,10 @@ public:
     static SinglePassCommandList Create(RootParams&&...);
 
 private:
-    ComPtr<ID3D12RootSignature> m_root;
+    Root::Signature             m_root;
     ComPtr<ID3D12PipelineState> m_state;
     GraphicsCommandList         m_commandList;
 };
-
-
-
-namespace Root
-{
-
-template < UINT base, UINT count = 1, UINT space = 0 > struct SrvRange
-{
-    static constexpr D3D12_DESCRIPTOR_RANGE1 Range{ .RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV, .NumDescriptors = count, .BaseShaderRegister = base, .RegisterSpace = space, .OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
-};
-
-template < UINT base, UINT count = 1, UINT space = 0 > struct UavRange
-{
-    static constexpr D3D12_DESCRIPTOR_RANGE1 Range{ .RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV, .NumDescriptors = count, .BaseShaderRegister = base, .RegisterSpace = space, .OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
-};
-
-template < UINT base, UINT count = 1, UINT space = 0 > struct SamplerRange
-{
-    static constexpr D3D12_DESCRIPTOR_RANGE1 Range{ .RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, .NumDescriptors = count, .BaseShaderRegister = base, .RegisterSpace = space, .OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
-};
-
-
-
-template < D3D12_SHADER_VISIBILITY visibility, typename... ranges > struct Table
-{
-    static constexpr std::array<D3D12_DESCRIPTOR_RANGE1, sizeof...(ranges)> Ranges{ ranges::Range... };
-    static constexpr D3D12_ROOT_PARAMETER1                                  Parameter
-    {
-        .ParameterType    = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-        .DescriptorTable  { .NumDescriptorRanges = Ranges.size(), .pDescriptorRanges = Ranges.data(), },
-        .ShaderVisibility = visibility,
-    };
-};
-
-template < D3D12_ROOT_PARAMETER_TYPE type, D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space, D3D12_ROOT_DESCRIPTOR_FLAGS flags > struct Descriptor
-{
-    static constexpr D3D12_ROOT_PARAMETER1 Parameter
-    {
-        .ParameterType = type,
-        .Descriptor{
-            .ShaderRegister = reg,
-            .RegisterSpace  = space,
-            .Flags = flags,
-        },
-        .ShaderVisibility = visibility,
-    };
-};
-
-template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space = 0, D3D12_ROOT_DESCRIPTOR_FLAGS flags = D3D12_ROOT_DESCRIPTOR_FLAG_NONE> using Cbv = Descriptor<D3D12_ROOT_PARAMETER_TYPE_CBV, visibility, reg, space, flags>;
-template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space = 0, D3D12_ROOT_DESCRIPTOR_FLAGS flags = D3D12_ROOT_DESCRIPTOR_FLAG_NONE> using Srv = Descriptor<D3D12_ROOT_PARAMETER_TYPE_SRV, visibility, reg, space, flags>;
-
-template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT count, UINT space = 0 > struct Constants
-{
-    static constexpr D3D12_ROOT_PARAMETER1 Parameter
-    {
-        .ParameterType    = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
-        .Constants{ .ShaderRegister = reg, .RegisterSpace = space, .Num32BitValues = count },
-        .ShaderVisibility = visibility,
-    };
-};
-
-
-
-template < typename... parameters > struct ParameterList
-{
-    static constexpr std::array<D3D12_ROOT_PARAMETER1, sizeof...(parameters)> Parameters { parameters::Parameter... };
-
-    static constexpr auto Size = sizeof...(parameters);
-    static constexpr auto Data = Parameters.data();
-
-    template < typename parameter > static constexpr ParameterList<parameter, parameters...> Cons{};
-};
-
-
-
-template < D3D12_ROOT_SIGNATURE_FLAGS flags > struct Flags{};
-
-
-
-template <> struct Signature<>
-{
-    static constexpr ParameterList<> Parameters{};
-    static constexpr D3D12_ROOT_SIGNATURE_DESC1 Desc{
-        .NumParameters     = 0,
-        .pParameters       = nullptr,
-        .NumStaticSamplers = 0,
-        .pStaticSamplers   = nullptr,
-        .Flags             = D3D12_ROOT_SIGNATURE_FLAG_NONE,
-    };
-
-    operator D3D12_ROOT_SIGNATURE_DESC1 const&() const { return Desc; }
-};
-
-template < D3D12_SHADER_VISIBILITY visibility, typename... ranges, typename... args > struct Signature<Table<visibility, ranges...>, args...>
-{
-private:
-    using Next = Signature<args...>;
-public:
-    static constexpr auto Parameters = Next::Parameters.Cons<Table<visibility, ranges...>>;
-    static constexpr D3D12_ROOT_SIGNATURE_DESC1 Desc{
-        .NumParameters     = Parameters.Size             ,
-        .pParameters       = Parameters.Data             ,
-        .NumStaticSamplers = Next::Desc.NumStaticSamplers,
-        .pStaticSamplers   = Next::Desc.pStaticSamplers  ,
-        .Flags             = Next::Desc.Flags            ,
-    };
-
-    operator D3D12_ROOT_SIGNATURE_DESC1 const&() const { return Desc; }
-};
-
-template < D3D12_ROOT_PARAMETER_TYPE type, D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT space, D3D12_ROOT_DESCRIPTOR_FLAGS flags, typename... args > struct Signature<Descriptor<type, visibility, reg, space, flags>, args...>
-{
-private:
-    using Next = Signature<args...>;
-public:
-    static constexpr auto Parameters = Next::Parameters.Cons<Descriptor<type, visibility, reg, space, flags>>;
-    static constexpr D3D12_ROOT_SIGNATURE_DESC1 Desc{
-        .NumParameters     = Parameters.Size             ,
-        .pParameters       = Parameters.Data             ,
-        .NumStaticSamplers = Next::Desc.NumStaticSamplers,
-        .pStaticSamplers   = Next::Desc.pStaticSamplers  ,
-        .Flags             = Next::Desc.Flags            ,
-    };
-
-    operator D3D12_ROOT_SIGNATURE_DESC1 const&() const { return Desc; }
-};
-
-template < D3D12_SHADER_VISIBILITY visibility, UINT reg, UINT count, UINT space, typename... args > struct Signature<Constants<visibility, reg, count, space>, args...>
-{
-private:
-    using Next = Signature<args...>;
-public:
-    static constexpr auto Parameters = Next::Parameters.Cons<Constants<visibility, reg, count, space>>;
-    static constexpr D3D12_ROOT_SIGNATURE_DESC1 Desc{
-        .NumParameters     = Parameters.Size             ,
-        .pParameters       = Parameters.Data             ,
-        .NumStaticSamplers = Next::Desc.NumStaticSamplers,
-        .pStaticSamplers   = Next::Desc.pStaticSamplers  ,
-        .Flags             = Next::Desc.Flags            ,
-    };
-
-    operator D3D12_ROOT_SIGNATURE_DESC1 const&() const { return Desc; }
-};
-
-template < D3D12_ROOT_SIGNATURE_FLAGS flags, typename... args > struct Signature<Flags<flags>, args...>
-{
-private:
-    using Next = Signature<args...>;
-public:
-    static constexpr auto Parameters = Next::Parameters;
-    static constexpr D3D12_ROOT_SIGNATURE_DESC1 Desc{
-        .NumParameters     = Next::Desc.NumParameters    ,
-        .pParameters       = Next::Desc.pParameters      ,
-        .NumStaticSamplers = Next::Desc.NumStaticSamplers,
-        .pStaticSamplers   = Next::Desc.pStaticSamplers  ,
-        .Flags             = Next::Desc.Flags | flags    ,
-    };
-
-    operator D3D12_ROOT_SIGNATURE_DESC1 const&() const { return Desc; }
-};
-
-}
-// namespace Root
-
-template < typename... args >
-inline ComPtr<ID3D12RootSignature> RenderDevice::CreateRootSignature() const
-{
-    return Create(Root::Signature<args...>{});
-}
 
 
 
@@ -551,7 +377,7 @@ constexpr D3D12_DEPTH_STENCIL_DESC NoDepthStencil{ .DepthEnable = FALSE, .Stenci
 
 struct State
 {
-    ComRef<ID3D12RootSignature>   RootSignature;
+    Root::Signature RootSignature;
 
     D3D12_PRIMITIVE_TOPOLOGY_TYPE TopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     std::span<D3D12_INPUT_ELEMENT_DESC const> InputLayout{};
@@ -577,8 +403,8 @@ namespace Compute
 
 struct State
 {
-    ComRef<ID3D12RootSignature> RootSignature;
-    ShaderCode                  CS;
+    Root::Signature RootSignature;
+    ShaderCode      CS;
 };
 
 }
@@ -587,16 +413,23 @@ struct State
 
 class AssetUploader;
 
-struct MipGenerationPass
+namespace MipGeneration
 {
-    ComPtr<ID3D12RootSignature> RootSignature;
+
+struct Pass
+{
+    Root::Signature             RootSignature;
     ComPtr<ID3D12PipelineState> PipelineStateSRGB;
     ComPtr<ID3D12PipelineState> PipelineState;
 
-    MipGenerationPass(RenderDevice const&);
+    Pass(RenderDevice const&);
 
-    void Render(ComRef<ID3D12Device>, GraphicsCommandList const&, AssetUploader&, ComRef<ID3D12Resource> uavTexture) const;
+    void Render(ComRef<ID3D12Device>, GraphicsCommandList const&, AssetUploader&, ComRef<ID3D12Resource> uavTexture);
 };
+
+}
+// namespace MipGeneration
+
 
 class AssetUploader
 {
@@ -632,7 +465,7 @@ private:
 
     std::vector<PendingObject>         m_pendingObjects;
 
-    MipGenerationPass                  m_mipGenerator;
+    MipGeneration::Pass                m_mipGenerator;
 };
 
 

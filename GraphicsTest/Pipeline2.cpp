@@ -3,6 +3,8 @@
 
 #include "Pipeline2.h"
 
+#include <JcabD3D/RootSignatureBuilder.h>
+
 #include "VisDefPipeline_ColorPassShader.h"
 #include "VisDefPipeline_PostprocessShader.h"
 #include "VisDefPipeline_ResolveVSShader.h"
@@ -11,6 +13,27 @@
 
 namespace VisDefPipeline
 {
+
+constexpr Root::Cbv      SceneConstantBuffer{ .Reg = 0 };
+
+constexpr Root::SrvTable VisibilityBufferSrv      { .Reg = 1 };
+constexpr Root::SrvTable DepthBufferSrv           { .Reg = 2 };
+constexpr Root::SrvTable ColorBufferSrv           { .Reg = 3 };
+constexpr Root::SrvTable PreviousTaaColorBufferSrv{ .Reg = 4 };
+constexpr Root::SrvTable PreviousDepthBufferSrv   { .Reg = 5 };
+constexpr Root::UavTable TaaBufferUav             { .Reg = 0 };
+constexpr Root::SrvTable TaaBufferSrv             { .Reg = 2 };
+
+constexpr Root::SrvTable     InstanceAttributesSrv { .Reg = 0,                                            };
+constexpr Root::UavTable     ColorBufferUav        { .Reg = 0,                                            };
+constexpr Root::SrvTable     TriangleIndicesSrvs   { .Reg = 1, .Count = MAX_MODEL_DEFINITIONS, .Space = 1 };
+constexpr Root::SrvTable     TriangleParametersSrvs{ .Reg = 1, .Count = MAX_MODEL_DEFINITIONS, .Space = 2 };
+constexpr Root::SrvTable     VertexPositionsSrvs   { .Reg = 1, .Count = MAX_MODEL_DEFINITIONS, .Space = 3 };
+constexpr Root::SrvTable     VertexAttributesSrvs  { .Reg = 1, .Count = MAX_MODEL_DEFINITIONS, .Space = 4 };
+constexpr Root::SrvTable     TextureSrvs           { .Reg = 1, .Count = MAX_TEXTURES         , .Space = 5 };
+constexpr Root::Srv          MaterialsBufferSrv    { .Reg = 0                                , .Space = 5 };
+constexpr Root::SamplerTable DefaultSamplers       { .Reg = 0, .Count = 2                                 };
+
 
 RenderPipelineAssets::RenderPipelineAssets(RenderDevice& renderDevice)
 {
@@ -45,21 +68,20 @@ RenderPipelineAssets::RenderPipelineAssets(RenderDevice& renderDevice)
 ColorPass::ColorPass(RenderDevice& renderDevice)
 {
     // Create the rendering root signature.
-    RootSignature = renderDevice.CreateRootSignature<
-        Root::Cbv<  D3D12_SHADER_VISIBILITY_ALL,                0,                           0 >,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<0, 1,                        0>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, 1,                        0>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<2, 1,                        0>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<0, 1,                        0>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS   , 1>>, // Triangle indices
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS   , 2>>, // Triangle paramters
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS   , 3>>, // Vertex positions
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_MODEL_DEFINITIONS   , 4>>, // Vertex attributes
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, MAX_TEXTURES            , 5>>, // Textures
-        Root::Srv  <D3D12_SHADER_VISIBILITY_ALL,                0,                           5 >, // Materials
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SamplerRange<0, 2, 0>>,
-        Root::Flags<D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT>
-    >();
+    RootSignature = Root::CreateSignature(renderDevice, 
+        SceneConstantBuffer   ,
+        InstanceAttributesSrv ,
+        VisibilityBufferSrv   ,
+        DepthBufferSrv        ,
+        ColorBufferUav        ,
+        TriangleIndicesSrvs   ,
+        TriangleParametersSrvs,
+        VertexPositionsSrvs   ,
+        VertexAttributesSrvs  ,
+        TextureSrvs           ,
+        MaterialsBufferSrv    ,
+        DefaultSamplers       
+    );
 
     // Create the pipeline state, which includes compiling and loading shaders.
     PipelineState = renderDevice.Create(Compute::State
@@ -70,7 +92,7 @@ ColorPass::ColorPass(RenderDevice& renderDevice)
     );
 }
 
-void ColorPass::Render(RenderDevice const& renderDevice, FrameParameters const& frameParameters, SceneGraphAssets const& sceneGraphAssets, RenderPipelineAssets const& assets) const
+void ColorPass::Render(RenderDevice const& renderDevice, FrameParameters const& frameParameters, SceneGraphAssets const& sceneGraphAssets, RenderPipelineAssets const& assets)
 {
     auto& visibilityBuffer = assets.VisibilityBuffer[frameParameters.flipIndex];
     auto& depthBuffer      = assets.DepthBuffer     [frameParameters.flipIndex];
@@ -78,25 +100,23 @@ void ColorPass::Render(RenderDevice const& renderDevice, FrameParameters const& 
 
     TransitionResource(renderDevice.commandList, colorBuffer.Resource, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-    renderDevice.commandList->SetComputeRootSignature(RootSignature.Get());
+    RootSignature.SetForCompute(renderDevice.commandList);
     renderDevice.commandList->SetPipelineState       (PipelineState.Get());
 
     renderDevice.commandList.SetDescriptorHeaps(renderDevice.srvDescriptorHeap, renderDevice.samplerDescriptorHeap);
 
-    renderDevice.commandList->SetComputeRootConstantBufferView(0, assets.SceneConstantsBuffer[renderDevice.frameIndex].Buffer->GetGPUVirtualAddress());
-    renderDevice.commandList->SetComputeRootDescriptorTable   (1, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(sceneGraphAssets.InstanceManager.GetCurrentFrameInstanceAttributes(renderDevice).SrvIndex));
-    renderDevice.commandList->SetComputeRootDescriptorTable   (2, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(visibilityBuffer.SrvDescriptorIndex));
-    renderDevice.commandList->SetComputeRootDescriptorTable   (3, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(depthBuffer     .SrvDescriptorIndex));
-    renderDevice.commandList->SetComputeRootDescriptorTable   (4, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(assets.ColorBufferUav));
-
-    renderDevice.commandList->SetComputeRootDescriptorTable( 5, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(sceneGraphAssets.ModelManager  .GetTriangleIndicesDescriptorTable   ()));
-    renderDevice.commandList->SetComputeRootDescriptorTable( 6, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(sceneGraphAssets.ModelManager  .GetTriangleParametersDescriptorTable()));
-    renderDevice.commandList->SetComputeRootDescriptorTable( 7, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(sceneGraphAssets.ModelManager  .GetVertexPositionsDescriptorTable   ()));
-    renderDevice.commandList->SetComputeRootDescriptorTable( 8, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(sceneGraphAssets.ModelManager  .GetVertexAttributesDescriptorTable  ()));
-    renderDevice.commandList->SetComputeRootDescriptorTable( 9, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(sceneGraphAssets.TextureManager.GetTexturesDescriptorTable          ()));
-
-    renderDevice.commandList->SetComputeRootShaderResourceView(10, sceneGraphAssets.MaterialManager.MaterialList.pResource->GetGPUVirtualAddress());
-    renderDevice.commandList->SetComputeRootDescriptorTable(11, renderDevice.samplerDescriptorHeap.GetGpuDescriptorHandle(0)); // TODO Samplers
+    RootSignature.SetCbv(renderDevice.commandList, SceneConstantBuffer   , assets.SceneConstantsBuffer[renderDevice.frameIndex].Buffer->GetGPUVirtualAddress());
+    RootSignature.SetSrvTable    (renderDevice.commandList, InstanceAttributesSrv , renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(sceneGraphAssets.InstanceManager.GetCurrentFrameInstanceAttributes(renderDevice).SrvIndex));
+    RootSignature.SetSrvTable    (renderDevice.commandList, VisibilityBufferSrv   , renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(visibilityBuffer.SrvDescriptorIndex));
+    RootSignature.SetSrvTable    (renderDevice.commandList, DepthBufferSrv        , renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(depthBuffer     .SrvDescriptorIndex));
+    RootSignature.SetUavTable    (renderDevice.commandList, ColorBufferUav        , renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(assets.ColorBufferUav));
+    RootSignature.SetSrvTable    (renderDevice.commandList, TriangleIndicesSrvs   , renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(sceneGraphAssets.ModelManager  .GetTriangleIndicesDescriptorTable   ()));
+    RootSignature.SetSrvTable    (renderDevice.commandList, TriangleParametersSrvs, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(sceneGraphAssets.ModelManager  .GetTriangleParametersDescriptorTable()));
+    RootSignature.SetSrvTable    (renderDevice.commandList, VertexPositionsSrvs   , renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(sceneGraphAssets.ModelManager  .GetVertexPositionsDescriptorTable   ()));
+    RootSignature.SetSrvTable    (renderDevice.commandList, VertexAttributesSrvs  , renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(sceneGraphAssets.ModelManager  .GetVertexAttributesDescriptorTable  ()));
+    RootSignature.SetSrvTable    (renderDevice.commandList, TextureSrvs           , renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(sceneGraphAssets.TextureManager.GetTexturesDescriptorTable          ()));
+    RootSignature.SetSrv         (renderDevice.commandList, MaterialsBufferSrv    , sceneGraphAssets.MaterialManager.MaterialList.pResource->GetGPUVirtualAddress());
+    RootSignature.SetSamplerTable(renderDevice.commandList, DefaultSamplers       , renderDevice.samplerDescriptorHeap.GetGpuDescriptorHandle(0)); // TODO Samplers
 
     renderDevice.commandList->Dispatch((renderDevice.Width + 63) / 64, (renderDevice.Height + 15) / 16, 1);
 
@@ -108,17 +128,17 @@ void ColorPass::Render(RenderDevice const& renderDevice, FrameParameters const& 
 PostprocessPass::PostprocessPass(RenderDevice& renderDevice)
 {
     // Create the rendering root signature.
-    RootSignature = renderDevice.CreateRootSignature<
-        Root::Cbv<  D3D12_SHADER_VISIBILITY_ALL,                0,    0 >,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<0, 1, 0>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<1, 1, 0>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<2, 1, 0>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<3, 1, 0>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<4, 1, 0>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<5, 1, 0>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::UavRange<0, 1, 0>>,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SamplerRange<0, 2, 0>>
-    >();
+    RootSignature = Root::CreateSignature(renderDevice, 
+        SceneConstantBuffer      ,
+        InstanceAttributesSrv    ,
+        VisibilityBufferSrv      ,
+        DepthBufferSrv           ,
+        ColorBufferSrv           ,
+        PreviousTaaColorBufferSrv,
+        PreviousDepthBufferSrv   ,
+        TaaBufferUav             ,
+        DefaultSamplers          
+    );
 
     // Create the pipeline state, which includes compiling and loading shaders.
     PipelineState = renderDevice.Create(Compute::State
@@ -129,7 +149,7 @@ PostprocessPass::PostprocessPass(RenderDevice& renderDevice)
     );
 }
 
-void PostprocessPass::Render(RenderDevice const& renderDevice, FrameParameters const& frameParameters, InstanceManager const& instanceManager, RenderPipelineAssets const& assets) const
+void PostprocessPass::Render(RenderDevice const& renderDevice, FrameParameters const& frameParameters, InstanceManager const& instanceManager, RenderPipelineAssets const& assets)
 {
     auto& visibilityBuffer       = assets.VisibilityBuffer[frameParameters.flipIndex];
     auto& depthBuffer            = assets.DepthBuffer     [frameParameters.flipIndex];
@@ -140,20 +160,20 @@ void PostprocessPass::Render(RenderDevice const& renderDevice, FrameParameters c
 
     TransitionResource(renderDevice.commandList, taaColorBuffer.Resource, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-    renderDevice.commandList->SetComputeRootSignature(RootSignature.Get());
+    RootSignature.SetForCompute(renderDevice.commandList);
     renderDevice.commandList->SetPipelineState       (PipelineState.Get());
 
     renderDevice.commandList.SetDescriptorHeaps(renderDevice.srvDescriptorHeap, renderDevice.samplerDescriptorHeap);
 
-    renderDevice.commandList->SetComputeRootConstantBufferView(0, assets.SceneConstantsBuffer[renderDevice.frameIndex].Buffer->GetGPUVirtualAddress());
-    renderDevice.commandList->SetComputeRootDescriptorTable   (1, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(instanceManager.GetCurrentFrameInstanceAttributes(renderDevice).SrvIndex));
-    renderDevice.commandList->SetComputeRootDescriptorTable   (2, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(visibilityBuffer.SrvDescriptorIndex));
-    renderDevice.commandList->SetComputeRootDescriptorTable   (3, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(depthBuffer.SrvDescriptorIndex));
-    renderDevice.commandList->SetComputeRootDescriptorTable   (4, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(colorBuffer.SrvDescriptorIndex));
-    renderDevice.commandList->SetComputeRootDescriptorTable   (5, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(previousTaaColorBuffer.SrvDescriptorIndex));
-    renderDevice.commandList->SetComputeRootDescriptorTable   (6, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(previousDepthBuffer.SrvDescriptorIndex));
-    renderDevice.commandList->SetComputeRootDescriptorTable   (7, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(assets.TaaColorBufferUav[frameParameters.flipIndex]));
-    renderDevice.commandList->SetComputeRootDescriptorTable   (8, renderDevice.samplerDescriptorHeap.GetGpuDescriptorHandle(0)); // TODO Samplers
+    RootSignature.SetCbv         (renderDevice.commandList, SceneConstantBuffer      , assets.SceneConstantsBuffer[renderDevice.frameIndex].Buffer->GetGPUVirtualAddress());
+    RootSignature.SetSrvTable    (renderDevice.commandList, InstanceAttributesSrv    , renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(instanceManager.GetCurrentFrameInstanceAttributes(renderDevice).SrvIndex));
+    RootSignature.SetSrvTable    (renderDevice.commandList, VisibilityBufferSrv      , renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(visibilityBuffer.SrvDescriptorIndex));
+    RootSignature.SetSrvTable    (renderDevice.commandList, DepthBufferSrv           , renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(depthBuffer.SrvDescriptorIndex));
+    RootSignature.SetSrvTable    (renderDevice.commandList, ColorBufferSrv           , renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(colorBuffer.SrvDescriptorIndex));
+    RootSignature.SetSrvTable    (renderDevice.commandList, PreviousTaaColorBufferSrv, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(previousTaaColorBuffer.SrvDescriptorIndex));
+    RootSignature.SetSrvTable    (renderDevice.commandList, PreviousDepthBufferSrv   , renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(previousDepthBuffer.SrvDescriptorIndex));
+    RootSignature.SetUavTable    (renderDevice.commandList, TaaBufferUav             , renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(assets.TaaColorBufferUav[frameParameters.flipIndex]));
+    RootSignature.SetSamplerTable(renderDevice.commandList, DefaultSamplers          , renderDevice.samplerDescriptorHeap.GetGpuDescriptorHandle(0)); // TODO Samplers
 
     renderDevice.commandList->Dispatch((renderDevice.Width + 7) / 8, (renderDevice.Height + 7) / 8, 1);
 
@@ -165,10 +185,10 @@ void PostprocessPass::Render(RenderDevice const& renderDevice, FrameParameters c
 ResolvePass::ResolvePass(RenderDevice& renderDevice)
 {
     // Create the rendering root signature.
-    RootSignature = renderDevice.CreateRootSignature<
-        Root::Cbv<  D3D12_SHADER_VISIBILITY_ALL,                0,    0 >,
-        Root::Table<D3D12_SHADER_VISIBILITY_ALL, Root::SrvRange<2, 1, 0>>
-    >();
+    RootSignature = Root::CreateSignature(renderDevice, 
+        SceneConstantBuffer,
+        TaaBufferSrv       
+    );
 
     // Create the pipeline state, which includes compiling and loading shaders.
     PipelineState = renderDevice.Create(Pipeline::State
@@ -184,17 +204,17 @@ ResolvePass::ResolvePass(RenderDevice& renderDevice)
     );
 }
 
-void ResolvePass::Render(RenderDevice const& renderDevice, FrameParameters const& frameParameters, RenderPipelineAssets const& assets) const
+void ResolvePass::Render(RenderDevice const& renderDevice, FrameParameters const& frameParameters, RenderPipelineAssets const& assets)
 {
     auto& taaColorBuffer = assets.TaaColorBuffer[frameParameters.flipIndex];
 
-    renderDevice.commandList->SetGraphicsRootSignature(RootSignature.Get());
+    RootSignature.SetForGraphics(renderDevice.commandList);
     renderDevice.commandList->SetPipelineState        (PipelineState.Get());
 
     renderDevice.commandList.SetDescriptorHeap(renderDevice.srvDescriptorHeap);
 
-    renderDevice.commandList->SetGraphicsRootConstantBufferView(0, assets.SceneConstantsBuffer[renderDevice.frameIndex].Buffer->GetGPUVirtualAddress());
-    renderDevice.commandList->SetGraphicsRootDescriptorTable   (1, renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(taaColorBuffer.SrvDescriptorIndex));
+    RootSignature.SetCbv     (renderDevice.commandList, SceneConstantBuffer, assets.SceneConstantsBuffer[renderDevice.frameIndex].Buffer->GetGPUVirtualAddress());
+    RootSignature.SetSrvTable(renderDevice.commandList, TaaBufferSrv       , renderDevice.srvDescriptorHeap.GetGpuDescriptorHandle(taaColorBuffer.SrvDescriptorIndex));
 
     renderDevice.commandList->DrawInstanced(3, 1, 0, 0);
 }

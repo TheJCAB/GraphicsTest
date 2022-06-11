@@ -356,13 +356,13 @@ struct SceneGraphAssets
 
 struct VisibilityPass
 {
-    ComPtr<ID3D12RootSignature> RootSignature;
+    Root::Signature             RootSignature;
     ComPtr<ID3D12PipelineState> SolidPipelineState;
     ComPtr<ID3D12PipelineState> AlphaTestPipelineState;
 
     VisibilityPass(RenderDevice&, uint32_t msaa);
 
-    void Render(RenderDevice const&, SceneGraphAssets const&, XMFLOAT2 const& pixelOffset, IntermediateRenderTarget const&, IntermediateDepthBuffer const&) const;
+    void Render(RenderDevice const&, SceneGraphAssets const&, XMFLOAT2 const& pixelOffset, IntermediateRenderTarget const&, IntermediateDepthBuffer const&);
 };
 
 struct RootSignatureIndices

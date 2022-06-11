@@ -72,42 +72,42 @@ struct RenderPipelineAssets
 
 struct MsaaGatherPass
 {
-    ComPtr<ID3D12RootSignature> RootSignature;
+    Root::Signature RootSignature;
     ComPtr<ID3D12PipelineState> PipelineState;
 
     MsaaGatherPass(RenderDevice& renderDevice);
 
-    void Render(RenderDevice const&, SceneGraphAssets const&, RenderPipelineAssets const&) const;
+    void Render(RenderDevice const&, SceneGraphAssets const&, RenderPipelineAssets const&);
 };
 
 struct ColorPass
 {
-    ComPtr<ID3D12RootSignature> RootSignature;
+    Root::Signature RootSignature;
     ComPtr<ID3D12PipelineState> PipelineState;
 
     ColorPass(RenderDevice& renderDevice);
 
-    void Render(RenderDevice const&, SceneGraphAssets const&, RenderPipelineAssets const&) const;
+    void Render(RenderDevice const&, SceneGraphAssets const&, RenderPipelineAssets const&);
 };
 
 struct PostprocessPass
 {
-    ComPtr<ID3D12RootSignature> RootSignature;
+    Root::Signature RootSignature;
     ComPtr<ID3D12PipelineState> PipelineState;
 
     PostprocessPass(RenderDevice& renderDevice);
 
-    void Render(RenderDevice const&, RenderPipelineAssets const&) const;
+    void Render(RenderDevice const&, RenderPipelineAssets const&);
 };
 
 struct ResolvePass
 {
-    ComPtr<ID3D12RootSignature> RootSignature;
+    Root::Signature RootSignature;
     ComPtr<ID3D12PipelineState> PipelineState;
 
     ResolvePass(RenderDevice& renderDevice);
 
-    void Render(RenderDevice const&, RenderPipelineAssets const&) const;
+    void Render(RenderDevice const&, RenderPipelineAssets const&);
 };
 
 

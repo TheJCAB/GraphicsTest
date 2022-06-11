@@ -46,7 +46,14 @@ endfunction()
 
 add_library (JcabD3D STATIC
 
-	JcabD3D.cpp         inc/JcabD3D.h
+    JcabD3D.cpp                 inc/JcabD3D.h
+    RootSignature.cpp           inc/JcabD3D/RootSignature.h
+
+                                inc/JcabD3D/Base.h
+                                inc/JcabD3D/CommandList.h
+                                inc/JcabD3D/DescriptorHeap.h
+                                inc/JcabD3D/ParameterId.h
+                                inc/JcabD3D/RootSignatureBuilder.h
 
     inc/HLSL.h
 )

@@ -83,32 +83,32 @@ struct FrameParameters
 
 struct ColorPass
 {
-    ComPtr<ID3D12RootSignature> RootSignature;
+    Root::Signature RootSignature;
     ComPtr<ID3D12PipelineState> PipelineState;
 
     ColorPass(RenderDevice& renderDevice);
 
-    void Render(RenderDevice const&, FrameParameters const&, SceneGraphAssets const&, RenderPipelineAssets const&) const;
+    void Render(RenderDevice const&, FrameParameters const&, SceneGraphAssets const&, RenderPipelineAssets const&);
 };
 
 struct PostprocessPass
 {
-    ComPtr<ID3D12RootSignature> RootSignature;
+    Root::Signature RootSignature;
     ComPtr<ID3D12PipelineState> PipelineState;
 
     PostprocessPass(RenderDevice& renderDevice);
 
-    void Render(RenderDevice const&, FrameParameters const&, InstanceManager const&, RenderPipelineAssets const&) const;
+    void Render(RenderDevice const&, FrameParameters const&, InstanceManager const&, RenderPipelineAssets const&);
 };
 
 struct ResolvePass
 {
-    ComPtr<ID3D12RootSignature> RootSignature;
+    Root::Signature RootSignature;
     ComPtr<ID3D12PipelineState> PipelineState;
 
     ResolvePass(RenderDevice& renderDevice);
 
-    void Render(RenderDevice const&, FrameParameters const&, RenderPipelineAssets const&) const;
+    void Render(RenderDevice const&, FrameParameters const&, RenderPipelineAssets const&);
 };
 
 
